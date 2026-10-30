@@ -413,6 +413,7 @@ impl eframe::App for Launcher {
                 self.game_ui(ui, busy);
                 self.more_tracks_ui(ui, busy);
                 self.display_ui(ui);
+                self.gameplay_ui(ui);
                 self.graphics_ui(ui);
                 self.updates_ui(ui);
                 ui.collapsing("Command line", |ui| {
@@ -495,6 +496,19 @@ impl Launcher {
             });
             ui.checkbox(&mut s.vsync, "VSync");
             ui.checkbox(&mut s.show_fps, "Show frame rate");
+        });
+    }
+
+    fn gameplay_ui(&mut self, ui: &mut egui::Ui) {
+        let s = &mut self.settings;
+        section(ui, "Gameplay", |ui| {
+            ui.checkbox(&mut s.forgiving_landings, "Forgiving landings");
+            ui.label(
+                egui::RichText::new(
+                    "Land a jump roughly level on both wheels and the bike takes a much harder landing without throwing you off. Nose-first landings and flips still crash. Off is the original game.",
+                )
+                .weak(),
+            );
         });
     }
 
