@@ -27,7 +27,7 @@ own copy of Motocross Madness 2.
 | [White line in the terrain](#white-line-in-the-terrain) | Fixes a bright line across the ground a little way into the distance | Pull request [#4](https://github.com/crspytopgn/openmcm2/pull/4) (open) |
 | [Track records are saved](#track-records-are-saved) | Best laps, stunt scores and race times are now written to the record tables | Pull request [#5](https://github.com/crspytopgn/openmcm2/pull/5) (open) |
 | [Enduro gates both ways](#enduro-gates-both-ways) | A gate counts whichever way you ride through it, as in the original | Pull request [#6](https://github.com/crspytopgn/openmcm2/pull/6) (open) |
-| [Easier riding](#easier-riding) | Forgiving landings, a wider course and an easier Easy, as one launcher option | Fork only |
+| [Easier riding](#easier-riding) | Makes Easy easier: forgiving landings, a wider course, slower computer riders | Fork only |
 | [Controller vibration](#controller-vibration) | The pad thumps on landings, knocks over bumps and jolts in crashes | Fork only |
 | [Sharper race display](#sharper-race-display) | Crisp speedometer, smooth race display artwork and radar lines, panel text that fits | Fork only |
 
@@ -70,15 +70,16 @@ does here too (for human riders; computer riders are unchanged).
 ### Easier riding
 
 One launcher checkbox under **Additional Tweaks** (`--easier`), off by
-default. Off is the original game. When on:
+default. Off is the original game. When on, it changes races on the Easy
+difficulty only; Medium and Hard stay as the original. On Easy:
 
 * **Forgiving landings.** Land a jump roughly level on both wheels and the
   bike takes a much harder landing without throwing you off. Nose-first
   landings and flips still crash.
 * **Wider course.** The course counts 20 ft wider on each side before the
   off-course timer starts.
-* **Easier Easy.** On the Easy difficulty the computer riders are slower and
-  you come off your bike less. Medium and Hard are unchanged.
+* **Slower rivals.** The computer riders are slower, and you come off your
+  bike less in other crashes.
 
 ### Controller vibration
 
