@@ -30,7 +30,7 @@ own copy of Motocross Madness 2.
 | [Easier riding](#easier-riding) | Makes Easy easier: forgiving landings, a wider course, slower computer riders | Fork only |
 | [Controller vibration](#controller-vibration) | The pad thumps on landings, knocks over bumps and jolts in crashes | Fork only |
 | [Sharper race display](#sharper-race-display) | Crisp speedometer, smooth race display artwork and radar lines, panel text that fits | Fork only |
-| [Desktop shortcut](#desktop-shortcut) | A launcher button that makes a shortcut starting the game straight away | Fork only |
+| [Play without the launcher](#play-without-the-launcher) | The game starts with the launcher's settings on its own, and a button makes a "Play MM2" desktop shortcut | Fork only |
 | [One-lap races](#one-lap-races) | National and Supercross can be 1 lap long | Fork only |
 
 ### Ultrawide support
@@ -111,13 +111,20 @@ enlarged about three times on a 1440p screen:
 Either way, the race panel's text is a little smaller so long times stay in
 their boxes, and a line that still wouldn't fit is drawn smaller.
 
-### Desktop shortcut
+### Play without the launcher
 
-**Make a desktop shortcut with these settings**, under the launcher's PLAY
-button, puts an OpenMCM2 shortcut on the desktop that starts the game
-straight away, skipping the launcher, with the launcher's settings as they
-are then. Press it again after changing a setting to replace it. On a Mac
-it is a `.command` script, on Linux a `.desktop` entry.
+Started with no arguments (a double-click, a shortcut), `mm2-viewer`
+starts with the settings last saved in the launcher, just as the
+launcher's PLAY does, and keeps `last-run.log` too. With no game set up
+yet, it opens the launcher instead. Arguments still work as before.
+
+**Make a desktop shortcut**, under the launcher's PLAY button, puts a
+**Play MM2** shortcut to it on the desktop. It always uses the launcher's
+latest settings, so it never needs making again. On a Mac it is a
+`.command` script, on Linux a `.desktop` entry.
+
+The launcher's settings code is now its own small crate, `mm2-settings`,
+shared by the launcher and the game.
 
 ### One-lap races
 
