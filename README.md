@@ -13,7 +13,8 @@ tests) is in the
 
 This fork adds a few fixes and gameplay options on top. Some of them are
 offered back to the original as pull requests; the rest are personal tweaks
-that stay here.
+that stay here. The options are together in the launcher's **Additional
+Tweaks** box.
 
 Like the original, **this repository contains no game files**: you need your
 own copy of Motocross Madness 2.
@@ -27,6 +28,8 @@ own copy of Motocross Madness 2.
 | [Track records are saved](#track-records-are-saved) | Best laps, stunt scores and race times are now written to the record tables | Pull request [#5](https://github.com/crspytopgn/openmcm2/pull/5) (open) |
 | [Enduro gates both ways](#enduro-gates-both-ways) | A gate counts whichever way you ride through it, as in the original | Pull request [#6](https://github.com/crspytopgn/openmcm2/pull/6) (open) |
 | [Easier riding](#easier-riding) | Forgiving landings, a wider course and an easier Easy, as one launcher option | Fork only |
+| [Controller vibration](#controller-vibration) | The pad thumps on landings, knocks over bumps and jolts in crashes | Fork only |
+| [Sharper race display](#sharper-race-display) | Crisp speedometer, smooth race display artwork and radar lines, panel text that fits | Fork only |
 
 ### Ultrawide support
 
@@ -37,9 +40,9 @@ own copy of Motocross Madness 2.
   stretching; each piece moves to the nearest edge. The menus stay 4:3 in
   the middle.
 * New launcher option **Race display nearer the middle**
-  (`--centred-display`), shown on screens wider than 16:9: puts the race
-  display where it sits on a 16:9 screen, so you don't have to look to the
-  far corners.
+  (`--centred-display`, in Additional Tweaks), for screens wider than
+  16:9: puts the race display where it sits on a 16:9 screen, so you
+  don't have to look to the far corners.
 * The launcher's **Display** box is redesigned: choose *Full screen
   (recommended)* or *In a window*, and the sizes are grouped by shape
   (4:3 Classic, 16:9 Widescreen, 21:9 Ultrawide) with their common names.
@@ -66,8 +69,8 @@ does here too (for human riders; computer riders are unchanged).
 
 ### Easier riding
 
-One launcher checkbox under **Gameplay** (`--easier`), off by default. Off
-is the original game. When on:
+One launcher checkbox under **Additional Tweaks** (`--easier`), off by
+default. Off is the original game. When on:
 
 * **Forgiving landings.** Land a jump roughly level on both wheels and the
   bike takes a much harder landing without throwing you off. Nose-first
@@ -76,6 +79,34 @@ is the original game. When on:
   off-course timer starts.
 * **Easier Easy.** On the Easy difficulty the computer riders are slower and
   you come off your bike less. Medium and Hard are unchanged.
+
+### Controller vibration
+
+**Controller vibration** in Additional Tweaks (`--vibration=N` or
+`--vibration=off`), on by default, with a Weaker/Stronger slider. A pad
+that can vibrate thumps when you land (harder landings thump harder),
+knocks over sharp bumps, jolts as you crash and rumbles while the rider
+tumbles. Nothing in the menus or replays, or while the game is out of
+focus. Works with Xbox pads on Windows and pads on Linux; not on a Mac.
+Started without the launcher, the game's own Force Feedback setting in
+Options > Controls is used instead.
+
+### Sharper race display
+
+**Sharper race display** in Additional Tweaks, on by default (off:
+`--original-race-display`). The race display's art is 640×480-era and is
+enlarged about three times on a 1440p screen:
+
+* The speedometer's numbers and marks are taken out of its picture and
+  drawn crisp at the screen's resolution, in the same places; the needle
+  has smooth edges.
+* The panel, radar and speedometer pictures are enlarged smoothly, so their
+  curves don't step.
+* The radar's track lines and crosshair are smooth instead of stepping in
+  blocks.
+
+Either way, the race panel's text is a little smaller so long times stay in
+their boxes, and a line that still wouldn't fit is drawn smaller.
 
 ## Playing this fork
 
