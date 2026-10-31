@@ -29,7 +29,10 @@ own copy of Motocross Madness 2.
 | [Enduro gates both ways](#enduro-gates-both-ways) | A gate counts whichever way you ride through it, as in the original | Pull request [#6](https://github.com/crspytopgn/openmcm2/pull/6) (open) |
 | [Easier riding](#easier-riding) | Makes Easy easier: forgiving landings, a wider course, slower computer riders | Fork only |
 | [Controller vibration](#controller-vibration) | The pad thumps on landings, knocks over bumps and jolts in crashes | Fork only |
-| [Sharper race display](#sharper-race-display) | Crisp speedometer, smooth race display artwork and radar lines, panel text that fits | Fork only |
+| [Modernised HUD](#modernised-hud) | Crisp speedometer, clean see-through panel, radar and dial, smooth radar lines, panel text that fits | Fork only |
+| [Quick get-up](#quick-get-up) | G or a pad's Back puts you straight back on the bike after a crash | Fork only |
+| [Live gap to your best lap](#live-gap-to-your-best-lap) | Under the race panel: how far ahead or behind your best lap you are | Fork only |
+| [Camera comfort](#camera-comfort) | A steadier chase camera and a field of view setting | Fork only |
 | [Play without the launcher](#play-without-the-launcher) | The game starts with the launcher's settings on its own, and a button makes a "Play MM2" desktop shortcut | Fork only |
 | [One-lap races](#one-lap-races) | National and Supercross can be 1 lap long | Fork only |
 
@@ -94,15 +97,21 @@ focus. Works with Xbox pads on Windows and pads on Linux; not on a Mac.
 Started without the launcher, the game's own Force Feedback setting in
 Options > Controls is used instead.
 
-### Sharper race display
+### Modernised HUD
 
-**Sharper race display** in Additional Tweaks, on by default (off:
+**Modernised HUD** in Additional Tweaks, on by default (off:
 `--original-race-display`). The race display's art is 640×480-era and is
 enlarged about three times on a 1440p screen:
 
 * The speedometer's numbers and marks are taken out of its picture and
   drawn crisp at the screen's resolution, in the same places; the needle
   has smooth edges.
+* The race panel, the radar and the speedometer's face are drawn as
+  see-through grey shapes with a faint light rim, at the screen's
+  resolution, in place of their old pictures: a rounded box with faint
+  rules between the panel's lines, a disc with the radar's rings and
+  cross, and a round dial cut flat at the bottom with a hub over the
+  needle.
 * The panel, radar and speedometer pictures are enlarged smoothly, so their
   curves don't step.
 * The radar's track lines and crosshair are smooth instead of stepping in
@@ -110,6 +119,31 @@ enlarged about three times on a 1440p screen:
 
 Either way, the race panel's text is a little smaller so long times stay in
 their boxes, and a line that still wouldn't fit is drawn smaller.
+
+### Quick get-up
+
+After a crash, **G** on the keyboard or **Back** (View) on a pad puts you
+straight back on the bike where the crash would have, instead of waiting
+for it to play out; the screen says so while you are down. Upright but
+stuck, it puts you back on the course. Not in network races.
+
+### Live gap to your best lap
+
+**Live gap to your best lap** in Additional Tweaks (`--lap-gap`), on by
+default. A box under the race panel shows how far ahead (green) or behind
+(red) your best lap you are at each point of the course, and each lap's
+time and gap as it ends. Lap 1 starts at the gate rather than the line,
+so the comparing starts from lap 2; the best lap is kept when you restart
+with R.
+
+### Camera comfort
+
+* **Steadier camera** in Additional Tweaks (`--steady-camera`), on by
+  default: the chase camera rises and dips with the bike more gently, so
+  bumps don't shake the view; it still turns with the bike as the
+  original does. Off is the original game's.
+* **Field of view** in Additional Tweaks (`--fov=N`), 60° to 120°: how
+  wide the riding cameras see. 85° is the original game's.
 
 ### Play without the launcher
 
