@@ -30,6 +30,7 @@ own copy of Motocross Madness 2.
 | [Enduro gates both ways](#enduro-gates-both-ways) | A gate only counted from one side; in the original it counts from either | Pull request [#6](https://github.com/crspytopgn/openmcm2/pull/6) (open) |
 | [Difficulty Level in single events](#difficulty-level-in-single-events) | The single event page's Easy/Normal/Hard was ignored: every race was Normal | Fork only |
 | [3D grass only on green ground](#3d-grass-only-on-green-ground) | The enhanced look's 3D grass also grew on dirt, sand and rock | Fork only |
+| [Cleaner starts](#cleaner-starts) | In National and Supercross races the computer riders piled into each other off the gate | Fork only |
 | [Display Resolution works](#settings-in-the-game) | Options > Graphics > Display Resolution listed old 16-bit modes and did nothing | Fork only |
 | [Frame rate in the game](#settings-in-the-game) | F2's frame rate only showed in the window's title bar, so not at all full screen | Fork only |
 
@@ -41,7 +42,7 @@ too, and each has a command-line switch.
 
 | Option | What it does | Default |
 | --- | --- | --- |
-| [Difficulty...](#difficulty-table) | A table of Easy, Normal and Hard's numbers: the other riders' power and crashes, how big a hit you take, Quarry tricks | The original's |
+| [Difficulty...](#difficulty-table) | Easy, Normal and Hard set from 1 to 10: the other riders' speed and skill, how easily you crash, Quarry tricks | The original's (3, 5, 7) |
 | [Air steering](#air-steering) | Steering in the air bends your flight a little | On |
 | [Air braking](#air-braking) | Braking in the air shortens your flight a little | On |
 | [Wider course](#wider-course) | The course counts 20 ft wider before the off-course timer starts | Off |
@@ -117,23 +118,40 @@ formula replaces it, and ground with no green now never grows grass.
 Brown tracks such as Chanos and most Nationals now have no 3D grass, as
 was meant; green stadium floors in Supercross still grow some.
 
+### Cleaner starts
+
+In National and Supercross races the computer riders often crashed into
+each other off the gate. The gate is about 55 ft wide, but each rider
+heads for its own lane only up to 7 ft either side of the course's middle,
+so the whole field squeezed into the middle at once, riders cut across
+each other, and two riders were often given almost the same lane and
+rubbed side by side until one was thrown off.
+
+Now the lanes are handed out in the gate's order from left to right and
+kept at least 3.5 ft apart, and each rider keeps its place across the gate
+for 2 seconds after the drop, then eases into its lane over the next 6.
+Over all 16 Nationals, the computer riders touch each other about 85%
+less in the first 12 seconds, and crash a third less often there.
+
 ### Difficulty table
 
-**Difficulty...** in the game's Tweaks opens a table of the four numbers
+**Difficulty...** in the game's Tweaks opens a table of the four things
 the original game changes between Easy, Normal and Hard, one column per
-level, each set with its arrows (`--difficulty=`, the twelve numbers row
-by row):
+level. Each cell is a step from 1 to 10, set with its arrows, and higher
+is always harder (`--difficulty=`, the twelve steps row by row). The
+original game's Easy, Normal and Hard are steps 3, 5 and 7, and
+**Original** puts them back. Pointing at a cell says what its step
+stands for:
 
-| | Easy | Normal | Hard |
-| --- | --- | --- | --- |
-| Rivals' engine power, % | 85 | 100 | 115 |
-| How easily rivals crash, % | 115 | 100 | 77 |
-| How big a hit you can take before falling, % | 110 | 100 | 95 |
-| Rivals' wait between tricks in the Stunt Quarry, s | 25 | 15 | 5 |
+| Step | 1 | 2 | **3** | 4 | **5** | 6 | **7** | 8 | 9 | 10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Rivals' speed: engine power, % of Normal | 70 | 77 | **85** | 92 | **100** | 107 | **115** | 122 | 130 | 140 |
+| Rivals' skill: how easily they crash, % of Normal | 150 | 130 | **115** | 107 | **100** | 88 | **77** | 70 | 60 | 50 |
+| How easily you crash: the hit you can take, % of Normal | 130 | 120 | **110** | 105 | **100** | 97 | **95** | 90 | 85 | 75 |
+| Rivals' tricks (Stunt Quarry): wait between tricks, s | 35 | 30 | **25** | 20 | **15** | 10 | **5** | 3 | 1 | 0 |
 
-The percentages are against the original game's Normal, so Normal is 100
-on each; Easy and Hard are the original's own, rounded, and **Original**
-puts them back.
+A table saved before the steps (as percentages) goes back to the
+original's.
 More engine power mostly helps the computer riders out of slow corners:
 they already have more than they use, so their top speed hardly changes.
 The single event page's Difficulty Level, a Pro Circuit's difficulty and a
