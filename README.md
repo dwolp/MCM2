@@ -30,6 +30,7 @@ own copy of Motocross Madness 2.
 | [Easier riding](#easier-riding) | Makes Easy easier: forgiving landings, a wider course, slower computer riders | Fork only |
 | [Controller vibration](#controller-vibration) | The pad thumps on landings, knocks over bumps and jolts in crashes | Fork only |
 | [Modernised HUD](#modernised-hud) | Crisp speedometer, clean see-through panel, radar and dial, smooth radar lines, panel text that fits | Fork only |
+| [Air steering](#air-steering) | Steering in the air bends your flight a little | Fork only |
 | [Quick get-up](#quick-get-up) | G or a pad's Back puts you straight back on the bike after a crash | Fork only |
 | [Live gap to your best lap](#live-gap-to-your-best-lap) | Under the race panel: how far ahead or behind your best lap you are | Fork only |
 | [Camera comfort](#camera-comfort) | A steadier chase camera and a field of view setting | Fork only |
@@ -119,6 +120,15 @@ enlarged about three times on a 1440p screen:
 
 Either way, the race panel's text is a little smaller so long times stay in
 their boxes, and a line that still wouldn't fit is drawn smaller.
+
+### Air steering
+
+**Air steering** in Additional Tweaks (`--air-steer`), on by default. In
+the original, steering in the air only turns the bike slightly (about
+11° a second) and the flight goes on as it was. With this on, steering
+also bends the flight, about 20° a second at full lock, and turns the
+bike with it so it lands in line with where it is going. Off is the
+original game.
 
 ### Quick get-up
 
