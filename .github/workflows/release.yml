@@ -20,6 +20,9 @@ env:
   VERSION: ${{ inputs.version || github.ref_name }}
   # Read by the launcher at build time, for its update check.
   OPENMCM2_VERSION: ${{ inputs.version || github.ref_name }}
+  # The repository the launcher takes its updates from: this one, so a
+  # fork's release updates from the fork.
+  OPENMCM2_REPO: ${{ github.repository }}
 
 permissions:
   contents: write

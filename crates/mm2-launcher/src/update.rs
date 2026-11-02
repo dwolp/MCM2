@@ -16,7 +16,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const LATEST: &str = "https://api.github.com/repos/crspytopgn/openmcm2/releases/latest";
+/// The GitHub repository whose releases this build updates from: the one
+/// the release workflow built it in (`OPENMCM2_REPO`), so a fork's builds
+/// follow the fork's releases, or else OpenMCM2's own.
+fn repo() -> &'static str {
+    option_env!("OPENMCM2_REPO").filter(|r| r.contains('/')).unwrap_or("crspytopgn/openmcm2")
+}
 /// Where updates are unpacked, beside the installed files so they can be
 /// swapped in by renaming.
 const STAGING: &str = ".openmcm2-update";
@@ -161,7 +166,7 @@ fn agent() -> ureq::Agent {
 pub fn check() -> Result<Option<Release>, String> {
     let current = current().ok_or("this build wasn't made by a release, so it can't update itself")?;
     let text = agent()
-        .get(LATEST)
+        .get(&format!("https://api.github.com/repos/{}/releases/latest", repo()))
         .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| format!("couldn't reach GitHub: {e}"))?
@@ -190,7 +195,7 @@ fn release_from(json: &serde_json::Value, current: &str, ending: &str) -> Result
         .find(|a| s(a, "name").is_some_and(|n| n == "SHA256SUMS" || n == "SHA256SUMS.txt"))
         .and_then(|a| s(a, "browser_download_url"));
     Ok(Some(Release {
-        page: s(json, "html_url").unwrap_or_else(|| "https://github.com/crspytopgn/openmcm2/releases/latest".into()),
+        page: s(json, "html_url").unwrap_or_else(|| format!("https://github.com/{}/releases/latest", repo())),
         asset: s(asset, "name").unwrap_or_default(),
         url: s(asset, "browser_download_url").ok_or("the download has no address")?,
         size: asset.get("size").and_then(|x| x.as_u64()).unwrap_or(0),
