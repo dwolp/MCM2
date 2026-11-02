@@ -17,7 +17,9 @@ itself.
   keeps the system's.
 * **Exporting textures for a high-res pack on Windows** (new in 1.0.3):
   `mm2-tools textures` stopped with "The system cannot find the path
-  specified". Packs already made on a Mac still load.
+  specified". Packs already made on a Mac still load. The export also
+  leaves out the 28 tiny 4×4 frame corners that stopped Upscayl's batch
+  partway; the game keeps its own.
 * **Full screen on the Steam Deck** (1.0.2): switching to full screen
   crashed the game, and it then crashed on every start. It now plays full
   screen.
