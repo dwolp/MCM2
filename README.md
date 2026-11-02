@@ -43,9 +43,8 @@ too, and each has a command-line switch.
 | Option | What it does | Default |
 | --- | --- | --- |
 | [Difficulty...](#difficulty-table) | Easy, Normal and Hard set from 1 to 10: the other riders' speed and skill, how easily you crash, Quarry tricks | The original's (3, 5, 7) |
-| [Air steering](#air-steering) | Steering in the air bends your flight a little | On |
-| [Air braking](#air-braking) | Braking in the air shortens your flight a little | On |
-| [Wider course](#wider-course) | The course counts 20 ft wider before the off-course timer starts | Off |
+| [Air steering](#air-steering) | A slider: how much steering in the air bends your flight | 100% (the middle; far left is the original) |
+| [Air braking](#air-braking) | A slider: how much braking in the air shortens your flight | 100% (the middle; far left is the original) |
 | [Quick get-up](#quick-get-up) | G or a pad's Back puts you straight back on the bike after a crash | On |
 | [Modernised HUD](#modernised-hud) | Crisp speedometer, see-through panel, radar and dial, smooth radar lines, panel text that fits | On |
 | [Race display nearer the middle](#ultrawide-support) | On screens wider than 16:9, the race display where it sits on 16:9 | Off |
@@ -145,11 +144,25 @@ stands for:
 
 | Step | 1 | 2 | **3** | 4 | **5** | 6 | **7** | 8 | 9 | 10 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Rivals' speed: engine power, % of Normal | 70 | 77 | **85** | 92 | **100** | 107 | **115** | 122 | 130 | 140 |
-| Rivals' skill: how easily they crash, % of Normal | 150 | 130 | **115** | 107 | **100** | 88 | **77** | 70 | 60 | 50 |
-| How easily you crash: the hit you can take, % of Normal | 130 | 120 | **110** | 105 | **100** | 97 | **95** | 90 | 85 | 75 |
+| Rivals' speed: engine power, % of Normal | 70 | 77 | **85** | 92 | **100** | 107 | **115** | 135 | 160 | 180 |
+| Rivals' skill: how easily they crash, and their trick chance in a race, % of Normal | 150 | 130 | **115** | 107 | **100** | 88 | **77** | 55 | 35 | 20 |
+| How easily you crash: the hit you can take, % of Normal | 130 | 120 | **110** | 105 | **100** | 97 | **95** | 80 | 65 | 50 |
 | Rivals' tricks (Stunt Quarry): wait between tricks, s | 35 | 30 | **25** | 20 | **15** | 10 | **5** | 3 | 1 | 0 |
 
+Steps 8 to 10 climb steeply, so 10 is far past Hard. Over 8 Nationals
+with rivals' speed and skill both set the same in the Hard column, the
+computer riders average:
+
+| Rivals' speed and skill | Pace | Crashes a minute |
+| --- | --- | --- |
+| 7 (Hard) | 52.5 ft/s | 1.95 |
+| 8 | 56.9 ft/s | 1.00 |
+| 9 | 59.7 ft/s | 0.80 |
+| 10 | 61.5 ft/s | 0.47 |
+
+Most of a skilled rider's crashes are landings in the middle of a trick,
+so the skill row also sets how often they try one in a race (the game's
+2% a frame in the air at its own steps).
 A table saved before the steps (as percentages) goes back to the
 original's.
 More engine power mostly helps the computer riders out of slow corners:
@@ -194,28 +207,24 @@ their boxes, and a line that still wouldn't fit is drawn smaller.
 
 ### Air steering
 
-**Air steering** in the game's Tweaks (`--air-steer`), on by default. In
-the original, steering in the air only turns the bike slightly (about
-11° a second) and the flight goes on as it was. With this on, steering
-also bends the flight, about 20° a second at full lock, and turns the
-bike with it so it lands in line with where it is going. Off is the
-original game.
+**Air steering** in the game's Tweaks (`--air-steer=N`), a slider from
+off to 200% in steps of 10, at 100% in the middle by default. In the
+original, steering in the air only turns the bike slightly (about 11° a
+second) and the flight goes on as it was. With this, steering also bends
+the flight, about 20° a second at full lock at 100% (twice that at
+200%), and turns the bike with it so it lands in line with where it is
+going. Off, far left, is the original game.
 
 ### Air braking
 
-**Air braking** in the game's Tweaks (`--air-brake`), on by default.
-Holding the brake in the air takes off a little of your speed, about
-6 ft/s each second at full brake, so you can come up short of a landing
-you would overshoot. The brake still tips the nose down too if Brake Gyro
-is on in Options > Controls, as in the original. Off is the original
-game, where braking in the air changes nothing about the flight.
-
-### Wider course
-
-**Wider course** in the game's Tweaks (`--wide-course`), off by default.
-The course counts 20 ft wider on each side before the off-course timer
-starts (and before the halved drive off the course), on every difficulty
-and for every rider. Off is the original game.
+**Air braking** in the game's Tweaks (`--air-brake=N`), a slider from
+off to 200% in steps of 10, at 100% in the middle by default. Holding the
+brake in the air takes off a little of your speed, about 6 ft/s each
+second at full brake at 100% (twice that at 200%), so you can come up
+short of a landing you would overshoot. The brake still tips the nose
+down too if Brake Gyro is on in Options > Controls, as in the original.
+Off, far left, is the original game, where braking in the air changes
+nothing about the flight.
 
 ### Quick get-up
 
