@@ -1,6 +1,6 @@
-# OpenMCM2 1.0.3 (Daniel's fork)
+# OpenMCM2 1.0.4 (Daniel's fork)
 
-Fixes for the Steam Deck, Linux and Windows on top of
+Fixes and small improvements on top of
 [1.0.0](https://github.com/dwolp/MCM2/releases/tag/v1.0.0).
 You need your own copy of Motocross Madness 2; see the
 [README](https://github.com/dwolp/MCM2#readme) for what this fork changes.
@@ -8,6 +8,20 @@ You need your own copy of Motocross Madness 2; see the
 Download the archive for your computer below, unpack it and start the
 launcher (`mm2-launcher`). An earlier 1.0 launcher offers this update
 itself.
+
+## New in 1.0.4
+
+* **Bumpers change tabs**: on a gamepad, LB and RB go to the previous
+  and next tab on the menu screens that have them (Single Player, the
+  network lobby, Options, the Pro Circuit, Records and Ghosts/Replays).
+* **Better 3D grass** (Enhanced graphics): no more grey grass on the
+  grey roads of the Baja, Enduro and Starlight Park tracks. The tufts are
+  shorter, reach out to 160 ft, and sink into the ground far off instead
+  of popping in.
+* **Options that do nothing are greyed out**: the settings the original
+  game had that this version doesn't use (the Advanced graphics sliders
+  and check boxes, Sound Hardware, and the Garage suspension sliders)
+  can no longer be changed.
 
 ## Fixes
 
