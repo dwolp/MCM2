@@ -177,7 +177,7 @@ pub struct TerrainRenderer {
     /// shines (drawing coordinates).
     headlights: Vec<(Vec3, Vec3)>,
     /// The track's light poles' lamp heads (drawing coordinates).
-    pole_lamps: Vec<Vec3>,
+    pole_lamps: Vec<(Vec3, Vec3)>,
 }
 
 /// The terrain renderer's part of the enhanced drawing.
@@ -981,7 +981,7 @@ impl TerrainRenderer {
                     let n = day.as_ref().map_or(0.0, |d| d.night);
                     // w: how strongly it glows, and how big it is (the poles'
                     // heads bigger), as the strength plus 10 for a pole.
-                    let all = self.headlights.iter().map(|(at, _)| (*at, n)).chain(self.pole_lamps.iter().map(|at| (*at, n + 10.0)));
+                    let all = self.headlights.iter().map(|(at, _)| (*at, n)).chain(self.pole_lamps.iter().map(|(at, _)| (*at, n + 10.0)));
                     for (out, (at, w)) in l.iter_mut().zip(all) {
                         *out = [at.x, at.y, at.z, w];
                     }
@@ -1150,7 +1150,7 @@ impl TerrainRenderer {
             e.post.shaft_strength = if shafts { SHAFT_STRENGTH * (1.0 - day.as_ref().map_or(0.0, |d| d.cover * 0.8)) } else { 0.0 };
             let night = day.as_ref().map_or(0.0, |d| d.night);
             let lamps: &[(Vec3, Vec3)] = if night > 0.0 { &self.headlights } else { &[] };
-            let poles: &[Vec3] = if night > 0.0 { &self.pole_lamps } else { &[] };
+            let poles: &[(Vec3, Vec3)] = if night > 0.0 { &self.pole_lamps } else { &[] };
             rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts, indoors, lamps, poles, night);
         }
         if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows && !traced) {

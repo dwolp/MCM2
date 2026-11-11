@@ -67,7 +67,7 @@ pub struct ObjectMesh {
     pub missing_models: Vec<String>,
     /// The track's light poles' lamp heads: the top of each, drawing
     /// coordinates, lit at night with ray tracing.
-    pub pole_lamps: Vec<Vec3>,
+    pub pole_lamps: Vec<(Vec3, Vec3)>,
 }
 
 /// An animated model on the track and the motion it plays.
@@ -480,7 +480,9 @@ impl ObjectMesh {
                 let top = v.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
                 let head: Vec<Vec3> = v.iter().map(|v| Vec3::from(v.position)).filter(|p| p.y > top - 3.0).collect();
                 if !head.is_empty() {
-                    mesh.pole_lamps.push(head.iter().copied().sum::<Vec3>() / head.len() as f32);
+                    let look = from_game(Vec3::from(p.look));
+                    let flat = Vec3::new(look.x, 0.0, look.z).normalize_or(Vec3::X);
+                    mesh.pole_lamps.push((head.iter().copied().sum::<Vec3>() / head.len() as f32, flat));
                 }
             }
         }

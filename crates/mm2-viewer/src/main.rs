@@ -1196,10 +1196,10 @@ fn feel_wrecks(race: &mut Race, renderer: &TerrainRenderer) {
     }
 }
 
-/// Where a bike's headlight is on the bike (its own coordinates, ft), and
-/// which way along its own z it shines (+1 or -1).
-const HEADLIGHT: Vec3 = Vec3::new(0.0, 3.2, -2.4);
-const HEADLIGHT_WAY: f32 = -1.0;
+/// Where a bike's headlight is: how far ahead of the bike's middle and how
+/// high, ft.
+const HEADLIGHT_AHEAD: f32 = 2.6;
+const HEADLIGHT_UP: f32 = 3.2;
 
 fn show(race: &Race, track: &Track, renderer: &mut TerrainRenderer, eye: Vec3, view: Option<cues::Eye>) {
     // The player's shadow: the bike and rider, seen from the sun.
@@ -1212,8 +1212,10 @@ fn show(race: &Race, track: &Track, renderer: &mut TerrainRenderer, eye: Vec3, v
         .racers
         .iter()
         .map(|r| {
-            let place = r.bike.place();
-            (place.transform_point3(HEADLIGHT), place.transform_vector3(Vec3::Z * -1.0 * HEADLIGHT_WAY).normalize_or(r.bike.forward()))
+            let ahead = r.bike.forward().normalize_or(Vec3::Z);
+            let up = r.bike.place().transform_vector3(Vec3::Y).normalize_or(Vec3::Y);
+            // Aimed a little down, at the track ahead.
+            (r.bike.position() + ahead * HEADLIGHT_AHEAD + up * HEADLIGHT_UP, (ahead - up * 0.12).normalize())
         })
         .collect();
     renderer.set_headlights(&lamps);

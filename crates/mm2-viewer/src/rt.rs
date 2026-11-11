@@ -216,6 +216,10 @@ struct Params {
     lights: [f32; 4],
 }
 
+/// How steeply a light pole's lamps point down, against how far toward
+/// the track it faces (1 to 1 is 45 degrees).
+const POLE_DOWN: f32 = 1.2;
+
 /// The most headlights traced.
 const MOST_HEADLIGHTS: usize = 80;
 
@@ -835,14 +839,19 @@ impl Scene {
         shafts: bool,
         indoors: bool,
         headlights: &[(glam::Vec3, glam::Vec3)],
-        poles: &[glam::Vec3],
+        poles: &[(glam::Vec3, glam::Vec3)],
         night: f32,
     ) {
         // w 0 for a headlight, 1 for a light pole (shining down).
         let lamps: Vec<[f32; 8]> = headlights
             .iter()
             .map(|(at, way)| [at.x, at.y, at.z, 0.0, way.x, way.y, way.z, 0.0])
-            .chain(poles.iter().map(|at| [at.x, at.y, at.z, 1.0, 0.0, -1.0, 0.0, 0.0]))
+            .chain(poles.iter().map(|(at, facing)| {
+                // Down onto the track, which lies behind the way the pole
+                // was placed facing.
+                let way = (glam::Vec3::NEG_Y * POLE_DOWN - *facing).normalize();
+                [at.x, at.y, at.z, 1.0, way.x, way.y, way.z, 0.0]
+            }))
             .take(MOST_HEADLIGHTS)
             .collect();
         if !lamps.is_empty() {
