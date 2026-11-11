@@ -59,6 +59,17 @@ const LAMP_MOST: f32 = 2.5;
 const BEAM_FULL: f32 = 0.95;
 const BEAM_EDGE: f32 = 0.62;
 const LAMP_REACH: f32 = 350.0;
+// A light pole: its colour and strength (a ft away), its wide downward
+// beam (the cosines of full and edge) and how far it reaches, ft.
+const POLE: vec3<f32> = vec3<f32>(0.95, 0.97, 1.0) * 2600.0;
+const POLE_FULL: f32 = 0.6;
+const POLE_EDGE: f32 = 0.15;
+const POLE_REACH: f32 = 260.0;
+// A lamp lighting a place less than this is left untraced there.
+const LAMP_FAINT: f32 = 0.015;
+// How far short of a headlight its shadow rays stop, ft: past the lamp's
+// own bike (its number plate stands in front of it).
+const OWN_BIKE: f32 = 4.5;
 
 // How far the ray now being traced may go: to the sun, or short of the
 // floodlight it goes to (its lamps are on the stadium's own panels).
@@ -263,33 +274,80 @@ fn headlit(world: vec3<f32>, p: vec2<i32>, dist: f32) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     let n = surface_normal(p, world);
-    var sum = vec3<f32>(0.0);
+    // Each lamp's light here, were nothing in the way; the four strongest
+    // kept (by insertion), the faint ones left out: only those are traced.
+    var best = array<u32, 4>(0u, 0u, 0u, 0u);
+    var light = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    var strength = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
     for (var j = 0u; j < count; j++) {
         let at = headlights[j * 2u].xyz;
+        let pole = headlights[j * 2u].w > 0.5;
         let way = headlights[j * 2u + 1u].xyz;
         let to = at - world;
         let d = length(to);
-        // Not its own bike, just behind the lamp.
-        if (d > LAMP_REACH || d < 2.0) {
+        let reach = select(LAMP_REACH, POLE_REACH, pole);
+        // Not a headlight's own bike, just behind the lamp.
+        if (d > reach || d < 2.0) {
             continue;
         }
         let l = to / d;
-        let into = smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way));
-        let beam = into * into;
+        let into = select(smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way)), smoothstep(POLE_EDGE, POLE_FULL, dot(-l, way)), pole);
         let facing = dot(n, l);
-        if (beam <= 0.0 || facing <= 0.0) {
+        if (into <= 0.0 || facing <= 0.0) {
             continue;
         }
-        // Off the surface; short of the lamp and its own bike's front.
-        let off = 0.04 + dist * 0.0006;
+        let fade = 1.0 - smoothstep(reach * 0.7, reach, d);
+        var c = select(LAMP, POLE, pole) * into * into * facing * fade / (d * d + 30.0);
+        var w = max(c.r, max(c.g, c.b));
+        if (w < LAMP_FAINT) {
+            continue;
+        }
+        var at_j = j;
+        for (var k = 0u; k < 4u; k++) {
+            if (w > strength[k]) {
+                let ow = strength[k];
+                let oc = light[k];
+                let oj = best[k];
+                strength[k] = w;
+                light[k] = c;
+                best[k] = at_j;
+                w = ow;
+                c = oc;
+                at_j = oj;
+            }
+        }
+    }
+    var sum = vec3<f32>(0.0);
+    let off = 0.04 + dist * 0.0006;
+    for (var k = 0u; k < 4u; k++) {
+        if (strength[k] <= 0.0) {
+            break;
+        }
+        let j = best[k];
+        let at = headlights[j * 2u].xyz;
+        let pole = headlights[j * 2u].w > 0.5;
+        let to = at - world;
+        let d = length(to);
+        let l = to / d;
+        // Short of the lamp: past a headlight's own bike, a pole's head.
+        let short = select(OWN_BIKE, 3.0, pole);
+        // The objects from the surface; the hills from half a foot above
+        // it, as the sun's rays do (the smooth ground near the eye lies a
+        // few inches off the hills the rays see).
         var rq: ray_query;
-        rayQueryInitialize(&rq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, 0xffu, 0.0, max(d - 1.2, 0.0), world + n * off, l));
+        rayQueryInitialize(&rq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, 0xffu & ~TERRAIN, 0.0, max(d - short, 0.0), world + n * off, l));
         rayQueryProceed(&rq);
         if (rayQueryGetCommittedIntersection(&rq).kind != RAY_QUERY_INTERSECTION_NONE) {
             continue;
         }
-        let fade = 1.0 - smoothstep(LAMP_REACH * 0.7, LAMP_REACH, d);
-        sum += LAMP * beam * facing * fade / (d * d + 30.0);
+        let lifted = world + n * off + vec3<f32>(0.0, TERRAIN_LIFT, 0.0);
+        var hq: ray_query;
+        rayQueryInitialize(&hq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, TERRAIN, 0.0, max(length(at - lifted) - short, 0.0), lifted, normalize(at - lifted)));
+        rayQueryProceed(&hq);
+        if (rayQueryGetCommittedIntersection(&hq).kind != RAY_QUERY_INTERSECTION_NONE) {
+            continue;
+        }
+        sum += light[k];
     }
     return min(sum, vec3<f32>(LAMP_MOST)) * params.lights.z;
 }

@@ -217,7 +217,7 @@ struct Params {
 }
 
 /// The most headlights traced.
-const MOST_HEADLIGHTS: usize = 16;
+const MOST_HEADLIGHTS: usize = 80;
 
 /// What the scene's shaders read the traced shadows from.
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -835,12 +835,15 @@ impl Scene {
         shafts: bool,
         indoors: bool,
         headlights: &[(glam::Vec3, glam::Vec3)],
+        poles: &[glam::Vec3],
         night: f32,
     ) {
+        // w 0 for a headlight, 1 for a light pole (shining down).
         let lamps: Vec<[f32; 8]> = headlights
             .iter()
-            .take(MOST_HEADLIGHTS)
             .map(|(at, way)| [at.x, at.y, at.z, 0.0, way.x, way.y, way.z, 0.0])
+            .chain(poles.iter().map(|at| [at.x, at.y, at.z, 1.0, 0.0, -1.0, 0.0, 0.0]))
+            .take(MOST_HEADLIGHTS)
             .collect();
         if !lamps.is_empty() {
             queue.write_buffer(&self.headlights, 0, bytemuck::cast_slice(&lamps));

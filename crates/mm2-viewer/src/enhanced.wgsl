@@ -49,5 +49,5 @@ struct Enh {
     // Each bike's headlight, ray traced (rt.rs): x on, y how many glow.
     headlights: vec4<f32>,
     // Each glowing headlight's place and strength.
-    lamps: array<vec4<f32>, 8>,
+    lamps: array<vec4<f32>, 64>,
 };

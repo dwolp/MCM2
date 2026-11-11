@@ -151,7 +151,7 @@ pub struct Shared {
 }
 
 /// The most headlights that glow on the bikes.
-pub const LAMPS: usize = 8;
+pub const LAMPS: usize = 64;
 
 /// Texels a side of the ruts' map, over the whole terrain.
 pub const RUT_SIDE: u32 = 8192;

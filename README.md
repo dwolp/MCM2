@@ -350,8 +350,10 @@ stands and the gate cast too. The open-air stadiums keep the sun.
 moon casting soft shadows, and the track dark but for the bikes'
 headlights. Each bike's headlight is a spotlight traced like the sun, so
 the riders ahead cast long shadows down the beams, the lamps glow, and a
-rider coming up behind lights you up. Without ray tracing there are no
-headlights and the moon is brighter, so the track still shows.
+rider coming up behind lights you up. On the Nationals the track's light
+poles come on too, each lamp head glowing and lighting a pool of track
+below it, shadows and all. Without ray tracing there are no headlights
+or pole lights and the moon is brighter, so the track still shows.
 
 **Reflections.** Where something shiny used to show only a painted sky, a
 ray now finds what is really there, lit by the sun where the sun reaches

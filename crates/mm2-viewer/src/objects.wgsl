@@ -332,13 +332,17 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
     if (in.mode < UNLIT) {
         colour += albedo * headlight_at(in.world, n, dist);
     }
-    // The headlights themselves glow at night, on the moving models.
-    if (in.moving > 0.5) {
-        for (var i = 0u; i < u32(enh.headlights.y); i++) {
-            let lamp = enh.lamps[i];
-            let near = 1.0 - smoothstep(0.08, 0.3, length(in.world - lamp.xyz));
-            colour += vec3<f32>(1.0, 0.95, 0.85) * near * 4.0 * lamp.w;
+    // The headlights (on the moving models) and the light poles' heads
+    // glow at night.
+    for (var i = 0u; i < u32(enh.headlights.y); i++) {
+        let lamp = enh.lamps[i];
+        let pole = lamp.w >= 10.0;
+        if (pole == (in.moving > 0.5)) {
+            continue;
         }
+        let r = select(0.3, 2.2, pole);
+        let near = 1.0 - smoothstep(r * 0.25, r, length(in.world - lamp.xyz));
+        colour += vec3<f32>(1.0, 0.95, 0.85) * near * select(4.0, 6.0, pole) * (lamp.w - select(0.0, 10.0, pole));
     }
     if (caked > 0.0 && enh.world.y > 0.3 && in.mode < UNLIT) {
         // Wet mud shines.

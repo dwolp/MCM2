@@ -65,6 +65,9 @@ pub struct ObjectMesh {
     extra_node: Option<u32>,
     pub placed: usize,
     pub missing_models: Vec<String>,
+    /// The track's light poles' lamp heads: the top of each, drawing
+    /// coordinates, lit at night with ray tracing.
+    pub pole_lamps: Vec<Vec3>,
 }
 
 /// An animated model on the track and the motion it plays.
@@ -468,8 +471,18 @@ impl ObjectMesh {
                 mesh.missing(&p.model);
                 continue;
             };
+            let first = mesh.vertices.len();
             mesh.add(&model, Some(placement_matrix(p)), 0, None, p.lighting, &mut batches);
             mesh.placed += 1;
+            // A light pole: its lamps are the bars at its top.
+            if bare(&p.model).eq_ignore_ascii_case("lightpole.slt") {
+                let v = &mesh.vertices[first..];
+                let top = v.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
+                let head: Vec<Vec3> = v.iter().map(|v| Vec3::from(v.position)).filter(|p| p.y > top - 3.0).collect();
+                if !head.is_empty() {
+                    mesh.pole_lamps.push(head.iter().copied().sum::<Vec3>() / head.len() as f32);
+                }
+            }
         }
 
         // The enhanced drawing's dressing (scenery.rs): placed like the

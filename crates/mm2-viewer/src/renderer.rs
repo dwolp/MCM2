@@ -176,6 +176,8 @@ pub struct TerrainRenderer {
     /// Each bike's headlight this frame: where it is and the way it
     /// shines (drawing coordinates).
     headlights: Vec<(Vec3, Vec3)>,
+    /// The track's light poles' lamp heads (drawing coordinates).
+    pole_lamps: Vec<Vec3>,
 }
 
 /// The terrain renderer's part of the enhanced drawing.
@@ -365,6 +367,7 @@ impl TerrainRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let objects_pole_lamps = objects.pole_lamps.clone();
         let mut rt = (upgrades.is_some() && crate::graphics::ray_traced()).then(|| {
             let geometry = objects.rt_geometry(device.limits().max_texture_array_layers);
             // The domed stadium's floodlights, high under its roof.
@@ -588,6 +591,7 @@ impl TerrainRenderer {
             size: (0, 0),
             enhanced,
             headlights: Vec::new(),
+            pole_lamps: objects_pole_lamps,
         }
     }
 
@@ -968,15 +972,18 @@ impl TerrainRenderer {
                 },
                 headlights: [
                     flag(self.enhanced.as_ref().is_some_and(|e| e.rt.is_some()) && !self.headlights.is_empty()),
-                    if day.as_ref().is_some_and(|d| d.night > 0.0) { self.headlights.len().min(crate::enhance::LAMPS) as f32 } else { 0.0 },
+                    if day.as_ref().is_some_and(|d| d.night > 0.0) { (self.headlights.len() + self.pole_lamps.len()).min(crate::enhance::LAMPS) as f32 } else { 0.0 },
                     0.0,
                     0.0,
                 ],
                 lamps: {
                     let mut l = [[0.0; 4]; crate::enhance::LAMPS];
                     let n = day.as_ref().map_or(0.0, |d| d.night);
-                    for (out, (at, _)) in l.iter_mut().zip(&self.headlights) {
-                        *out = [at.x, at.y, at.z, n];
+                    // w: how strongly it glows, and how big it is (the poles'
+                    // heads bigger), as the strength plus 10 for a pole.
+                    let all = self.headlights.iter().map(|(at, _)| (*at, n)).chain(self.pole_lamps.iter().map(|at| (*at, n + 10.0)));
+                    for (out, (at, w)) in l.iter_mut().zip(all) {
+                        *out = [at.x, at.y, at.z, w];
                     }
                     l
                 },
@@ -1143,7 +1150,8 @@ impl TerrainRenderer {
             e.post.shaft_strength = if shafts { SHAFT_STRENGTH * (1.0 - day.as_ref().map_or(0.0, |d| d.cover * 0.8)) } else { 0.0 };
             let night = day.as_ref().map_or(0.0, |d| d.night);
             let lamps: &[(Vec3, Vec3)] = if night > 0.0 { &self.headlights } else { &[] };
-            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts, indoors, lamps, night);
+            let poles: &[Vec3] = if night > 0.0 { &self.pole_lamps } else { &[] };
+            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts, indoors, lamps, poles, night);
         }
         if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows && !traced) {
             for (cascade, layer) in e.shared.layers.iter().enumerate() {
