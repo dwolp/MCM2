@@ -341,7 +341,11 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
             continue;
         }
         let r = select(0.3, 2.2, pole);
-        let near = 1.0 - smoothstep(r * 0.25, r, length(in.world - lamp.xyz));
+        var near = 1.0 - smoothstep(r * 0.25, r, length(in.world - lamp.xyz));
+        // A pole's lamps face down: the glow on the underside of its head.
+        if (pole) {
+            near *= smoothstep(lamp.y + 0.6, lamp.y - 0.8, in.world.y) * smoothstep(0.3, -0.5, n.y);
+        }
         colour += vec3<f32>(1.0, 0.95, 0.85) * near * select(4.0, 6.0, pole) * (lamp.w - select(0.0, 10.0, pole));
     }
     if (caked > 0.0 && enh.world.y > 0.3 && in.mode < UNLIT) {

@@ -159,6 +159,8 @@ pub struct TerrainRenderer {
     shadow_casters: Option<[usize; 2]>,
     /// A desert track, for the enhanced drawing's weather.
     desert: bool,
+    /// A stadium track (Supercross).
+    stadium: bool,
     /// In a replay, the distance (ft) to the rider the camera follows: the
     /// enhanced drawing then blurs what is out of focus and what the
     /// camera swings past.
@@ -584,6 +586,7 @@ impl TerrainRenderer {
             shadow: None,
             shadow_casters: None,
             desert: false,
+            stadium: false,
             cinematic: None,
             last_view_proj: None,
             scene_format,
@@ -662,6 +665,11 @@ impl TerrainRenderer {
     /// overcast there.
     pub fn set_desert(&mut self, desert: bool) {
         self.desert = desert;
+    }
+
+    /// A stadium track: at night its own floodlights keep the floor lit.
+    pub fn set_stadium(&mut self, stadium: bool) {
+        self.stadium = stadium;
     }
 
     /// Lights the terrain and objects with the scene's lights.
@@ -906,7 +914,16 @@ impl TerrainRenderer {
         });
         // The enhanced drawing's hour and weather light the scene in
         // place of its own lights, and its real sky's colour is the haze's.
-        let day = showing.map(|e| crate::enhance::daylight(&self.lights, e.time, e.weather));
+        let mut day = showing.map(|e| crate::enhance::daylight(&self.lights, e.time, e.weather));
+        // In a stadium at night the floodlights light the floor as the day
+        // would: the scene's own lights, under the night sky.
+        if let Some(d) = day.as_mut().filter(|d| self.stadium && d.night > 0.0) {
+            if let Some(e) = showing {
+                let lit = crate::enhance::daylight(&self.lights, None, e.weather);
+                d.lights = lit.lights;
+                d.night = 0.0;
+            }
+        }
         let real_sky = showing.is_some_and(|e| e.clouds && e.sky) && self.sky.is_some() && self.sky_on;
         let lights = day.as_ref().map_or(self.lights, |d| d.lights);
         let globals = Globals {

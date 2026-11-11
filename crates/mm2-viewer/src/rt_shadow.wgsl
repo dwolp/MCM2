@@ -62,8 +62,8 @@ const LAMP_REACH: f32 = 350.0;
 // A light pole: its colour and strength (a ft away), its wide downward
 // beam (the cosines of full and edge) and how far it reaches, ft.
 const POLE: vec3<f32> = vec3<f32>(0.95, 0.97, 1.0) * 2600.0;
-const POLE_FULL: f32 = 0.82;
-const POLE_EDGE: f32 = 0.45;
+const POLE_FULL: f32 = 0.95;
+const POLE_EDGE: f32 = 0.2;
 const POLE_REACH: f32 = 260.0;
 // A lamp lighting a place less than this is left untraced there.
 const LAMP_FAINT: f32 = 0.015;
@@ -293,7 +293,8 @@ fn headlit(world: vec3<f32>, p: vec2<i32>, dist: f32) -> vec3<f32> {
             continue;
         }
         let l = to / d;
-        let into = select(smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way)), smoothstep(POLE_EDGE, POLE_FULL, dot(-l, way)), pole);
+        // A pole's pool fades out slowly to its edge, brightest under it.
+        let into = select(smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way)), pow(smoothstep(POLE_EDGE, POLE_FULL, dot(-l, way)), 1.5), pole);
         let facing = dot(n, l);
         if (into <= 0.0 || facing <= 0.0) {
             continue;

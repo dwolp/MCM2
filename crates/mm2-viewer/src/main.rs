@@ -2984,6 +2984,7 @@ fn track_renderer(track: &Track, device: &wgpu::Device, queue: &wgpu::Queue, for
     }
     renderer.set_lights(track.lights);
     renderer.set_desert(track.desert);
+    renderer.set_stadium(track.supercross);
     renderer.set_crowd(device, &track.spectators);
     if let Some(detail) = &track.detail {
         renderer.set_detail(device, queue, detail);
@@ -3647,6 +3648,7 @@ impl App {
         }
         renderer.set_lights(track.lights);
         renderer.set_desert(track.desert);
+    renderer.set_stadium(track.supercross);
         renderer.set_crowd(&state.device, &track.spectators);
         if let Some(detail) = &track.detail {
             renderer.set_detail(&state.device, &state.queue, detail);
