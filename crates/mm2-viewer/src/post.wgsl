@@ -32,6 +32,8 @@ struct Post {
 @group(0) @binding(4) var src_tex: texture_2d<f32>;
 @group(0) @binding(5) var smooth_sampler: sampler;
 @group(0) @binding(6) var bloom_tex: texture_2d<f32>;
+// The ray-traced light shafts (rt_volume.wgsl), when drawn (scaled.y).
+@group(0) @binding(7) var shaft_tex: texture_2d<f32>;
 
 struct Out {
     @builtin(position) position: vec4<f32>,
@@ -281,7 +283,10 @@ fn fs_composite(in: Out) -> @location(0) vec4<f32> {
     if (post.flags.x > 0.5) {
         c *= textureSampleLevel(ao_tex, smooth_sampler, in.uv, 0.0).r;
     }
-    if (post.sun.z > 0.0) {
+    if (post.scaled.y > 0.0) {
+        // Ray traced: the sunlit air, as strong as scaled.y says.
+        c += post.sun_colour.rgb * textureSampleLevel(shaft_tex, smooth_sampler, in.uv, 0.0).r * post.scaled.y;
+    } else if (post.sun.z > 0.0) {
         c += shafts(in.uv, in.position.xy);
     }
     if (post.flags.y > 0.5) {

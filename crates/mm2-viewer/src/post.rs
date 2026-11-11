@@ -28,7 +28,8 @@ struct PostGlobals {
     /// size out of focus (px), z the motion blur's strength, w 1 on.
     cinematic: [f32; 4],
     /// x 1 when the scene is drawn smaller than the screen and stretched
-    /// over it.
+    /// over it; y how strong the ray-traced light shafts are (0 for the
+    /// screen's own).
     scaled: [f32; 4],
 }
 
@@ -54,6 +55,14 @@ struct Targets {
 
 pub struct Post {
     samples: u32,
+    /// The ray-traced light shafts (crate::rt) and how strong they show,
+    /// when drawn; a blank stand-in for the group.
+    traced_shafts: Option<wgpu::TextureView>,
+    pub shaft_strength: f32,
+    /// The sun's colour for them: theirs whether or not the sun is on
+    /// screen (the screen's own shafts know it only while it is).
+    pub shaft_colour: [f32; 3],
+    blank: wgpu::TextureView,
     globals: wgpu::Buffer,
     sampler: wgpu::Sampler,
     ao: wgpu::RenderPipeline,
@@ -120,7 +129,13 @@ impl Post {
             },
             alpha: wgpu::BlendComponent::REPLACE,
         };
+        let blank = Self::texture(device, "no shafts", (1, 1), HDR_FORMAT, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT)
+            .create_view(&Default::default());
         Post {
+            traced_shafts: None,
+            shaft_strength: 0.0,
+            shaft_colour: [0.0; 3],
+            blank,
             samples,
             globals: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("post"),
@@ -231,7 +246,8 @@ impl Post {
         let bloom_up = (1..BLOOM_STEPS)
             .map(|i| self.group(device, &self.bloom_up, &[(4, &bloom[i])], false, true))
             .collect();
-        let composite = self.group(device, &self.composite, &[(1, &depth_only), (2, &hdr), (3, &blurred), (6, &bloom[0])], true, true);
+        let shafts = self.traced_shafts.clone().unwrap_or_else(|| self.blank.clone());
+        let composite = self.group(device, &self.composite, &[(1, &depth_only), (2, &hdr), (3, &blurred), (6, &bloom[0]), (7, &shafts)], true, true);
         self.targets = Some(Targets {
             size,
             msaa,
@@ -247,6 +263,14 @@ impl Post {
             bloom_up,
             composite,
         });
+    }
+
+    /// Shows the light shafts from `traced` (the ray-traced ones), or works
+    /// them out on screen with none.
+    pub fn set_traced_shafts(&mut self, traced: Option<&wgpu::TextureView>) {
+        self.traced_shafts = traced.cloned();
+        // Made again with them at the next frame.
+        self.targets = None;
     }
 
     /// Where to draw the scene at `size`: the colour, what it resolves
@@ -285,10 +309,19 @@ impl Post {
             // spans 1 ft away.
             params: [3.0, if showing.is_some_and(|e| e.grade) { 2.2 } else { 1.5 }, if showing.is_some_and(|e| e.grade) { 0.9 } else { 0.6 }, proj.y_axis.y * 0.5 * h],
             sun: sun.filter(|_| showing.is_some_and(|e| e.shafts)).map_or([0.0; 4], |(s, _)| [s[0], s[1], s[2], 0.0]),
-            sun_colour: sun.map_or([0.0; 4], |(_, c)| [c[0], c[1], c[2], 0.0]),
+            sun_colour: match sun {
+                _ if self.traced_shafts.is_some() => [self.shaft_colour[0], self.shaft_colour[1], self.shaft_colour[2], 0.0],
+                Some((_, c)) => [c[0], c[1], c[2], 0.0],
+                None => [0.0; 4],
+            },
             reproject: cinematic.map_or(Mat4::IDENTITY, |c| c.1).to_cols_array_2d(),
             cinematic: cinematic.map_or([0.0; 4], |(focus, _)| [focus, 0.006 * h, 0.5, 1.0]),
-            scaled: [(t.size != screen) as u32 as f32, 0.0, 0.0, 0.0],
+            scaled: [
+                (t.size != screen) as u32 as f32,
+                if self.traced_shafts.is_some() && showing.is_some_and(|e| e.shafts) { self.shaft_strength } else { 0.0 },
+                0.0,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         let pass = |encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, load: bool, pipeline: &wgpu::RenderPipeline, group: &wgpu::BindGroup| {

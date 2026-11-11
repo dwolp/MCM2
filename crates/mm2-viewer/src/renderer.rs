@@ -1058,6 +1058,7 @@ impl TerrainRenderer {
             let rt = e.rt.as_mut().unwrap();
             if rt.resize(device, scene) {
                 e.shared.set_traced(device, rt);
+                e.post.set_traced_shafts(rt.shafts());
             }
             rt.update(&mut encoder);
             {
@@ -1097,7 +1098,12 @@ impl TerrainRenderer {
             // Indoors (a stadium, with no sky box) only the moving models
             // cast, as with the cascades.
             let mask = if self.sky.is_none() { crate::rt::MOVING } else { 0xff };
-            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect));
+            // The light shafts, outdoors only (indoors the "sun" is the
+            // stadium's lights), fainter under cloud.
+            let shafts = showing.is_some_and(|s| s.shafts) && self.sky.is_some() && self.sky_on;
+            e.post.shaft_colour = lights.sun;
+            e.post.shaft_strength = if shafts { SHAFT_STRENGTH * (1.0 - day.as_ref().map_or(0.0, |d| d.cover * 0.8)) } else { 0.0 };
+            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts);
         }
         if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows && !traced) {
             for (cascade, layer) in e.shared.layers.iter().enumerate() {
@@ -1454,6 +1460,9 @@ pub fn fog_range(quality: u32, visibility: f32, haziness: f32) -> (f32, f32) {
     let start = (1.0 - haziness) * (end - CLEAR);
     (start, end)
 }
+
+/// How strongly the ray-traced light shafts show (crate::rt).
+const SHAFT_STRENGTH: f32 = 0.6;
 
 pub fn from_game(v: Vec3) -> Vec3 {
     Vec3::new(v.x, v.y, -v.z)
