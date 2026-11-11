@@ -4,10 +4,8 @@
 // air glows and the shaded air does not: beams through the trees and past
 // whatever stands in the sun, strongest looking toward it. In place of the
 // screen-space shafts (post.wgsl `shafts`), which needed the sun on
-// screen. Out as the shadows' raw texture is, for the same blend over time
-// and blur: x how much sunlight the air sends toward the eye, y how far
-// the pixel's surface is, z a stand-in shade distance that sets the blur's
-// width, w 1 on a moving model.
+// screen. At half the scene's size, blended over time (`settle`); the
+// composite stretches it over the screen.
 
 enable wgpu_ray_query;
 
@@ -28,16 +26,11 @@ struct Params {
 @group(0) @binding(3) var<storage, read> cutouts: array<vec4<f32>>;
 @group(0) @binding(4) var masks: texture_2d_array<f32>;
 @group(0) @binding(5) var mask_sampler: sampler;
-// The shadows' raw texture, for whether each pixel is on a moving model.
-@group(0) @binding(6) var shadows: texture_2d<f32>;
 @group(0) @binding(7) var out: texture_storage_2d<rgba16float, write>;
 
 // How far the steps go, ft, and how many there are.
 const REACH: f32 = 600.0;
 const STEPS: u32 = 3u;
-// The blur's width, pixels (rt_blur.wgsl's sun radius, to set it by).
-const BLUR: f32 = 5.0;
-const SUN_RADIUS: f32 = 0.0047;
 // How far along a ray toward the sun leaves stop it, ft.
 const CUTOUT_REACH: f32 = 300.0;
 
@@ -81,19 +74,37 @@ fn phase(cos: f32) -> f32 {
     return 0.25 + forward;
 }
 
-@compute @workgroup_size(8, 8)
-fn scatter(@builtin(global_invocation_id) id: vec3<u32>) {
-    let p = vec2<i32>(id.xy);
-    if (f32(p.x) >= params.size.x || f32(p.y) >= params.size.y) {
-        return;
-    }
-    let own = textureLoad(shadows, p, 0);
+// Which of a 2x2 block's full-size pixels this frame's half-size pixel
+// stands for: each in turn over four frames.
+fn sample_at(half: vec2<i32>) -> vec2<i32> {
+    let f = u32(params.size.z) % 4u;
+    let o = array<vec2<i32>, 4>(vec2<i32>(0, 0), vec2<i32>(1, 1), vec2<i32>(1, 0), vec2<i32>(0, 1))[f];
+    return min(half * 2 + o, vec2<i32>(params.size.xy) - 1);
+}
+
+// Where the full-size pixel `p` looks: the point it sees (at the far
+// plane for the sky) and whether it is sky.
+fn seen(p: vec2<i32>) -> vec4<f32> {
     let d = textureLoad(depth, p, 0);
     let ndc = vec2<f32>((f32(p.x) + 0.5) / params.size.x * 2.0 - 1.0, 1.0 - (f32(p.y) + 0.5) / params.size.y * 2.0);
     let h = params.inverse_view_proj * vec4<f32>(ndc, d, 1.0);
-    let toward = h.xyz / h.w - params.camera.xyz;
+    return vec4<f32>(h.xyz / h.w, select(0.0, 1.0, d >= 1.0));
+}
+
+// Worked out at half the scene's size each way, a quarter of the rays:
+// the haze is soft. Out: x how much sunlight the air sends toward the
+// eye, y how far the pixel's surface is.
+@compute @workgroup_size(8, 8)
+fn scatter(@builtin(global_invocation_id) id: vec3<u32>) {
+    let half = vec2<i32>(id.xy);
+    if (any(half >= vec2<i32>(textureDimensions(out)))) {
+        return;
+    }
+    let p = sample_at(half);
+    let at = seen(p);
+    let toward = at.xyz - params.camera.xyz;
     let dir = normalize(toward);
-    var dist = select(length(toward), 1e9, d >= 1.0);
+    let dist = select(length(toward), 1e9, at.w > 0.5);
     let length_ = min(dist, REACH);
     let jitter = noise(vec2<f32>(id.xy) + params.size.z * 5.588238);
     var lit = 0.0;
@@ -106,11 +117,56 @@ fn scatter(@builtin(global_invocation_id) id: vec3<u32>) {
     // The sunlit share of the air looked through, by how far, and as it
     // scatters toward the eye; sky as far off as the steps reach.
     let air = lit / f32(STEPS) * length_ / REACH * phase(dot(dir, params.to_sun.xyz));
-    // The sky too is blended over time and blurred (the shadows' passes
-    // leave out what is past 50000 ft): it is where the beams show most.
-    // The sky as far as the far plane, where the blend over time finds it
-    // too.
-    let shown = length(toward);
-    let blur = BLUR * min(shown, REACH) * params.size.w / SUN_RADIUS;
-    textureStore(out, p, vec4<f32>(air, shown, blur, own.w));
+    textureStore(out, half, vec4<f32>(air, length(toward), 0.0, 0.0));
+}
+
+// ---- Over time: each frame's few rays blended with what the frames
+// before saw at the same place, at the same half size. ----
+
+@group(0) @binding(8) var raw: texture_2d<f32>;
+@group(0) @binding(9) var before: texture_2d<f32>;
+@group(0) @binding(10) var history: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(11) var shown: texture_storage_2d<rgba16float, write>;
+
+// How much of the frames before is kept: about the last ten.
+const KEEP: f32 = 0.9;
+
+@compute @workgroup_size(8, 8)
+fn settle(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = vec2<i32>(textureDimensions(raw));
+    let half = vec2<i32>(id.xy);
+    if (any(half >= size)) {
+        return;
+    }
+    let now = textureLoad(raw, half, 0);
+    var out = now;
+    if (params.history.x > 0.5) {
+        // Where this place was on the half-size screen a frame ago.
+        let world = seen(sample_at(half)).xyz;
+        let was = params.previous * vec4<f32>(world, 1.0);
+        if (was.w > 0.0) {
+            let uv = vec2<f32>(was.x / was.w * 0.5 + 0.5, 0.5 - was.y / was.w * 0.5);
+            let q = vec2<i32>(floor(uv * vec2<f32>(size)));
+            if (all(q >= vec2<i32>(0)) && all(q < size)) {
+                let old = textureLoad(before, q, 0);
+                let then = length(params.history.yzw - world);
+                if (abs(old.y - then) < 0.05 * then + 1.0) {
+                    // Within what is round about now, so a moving edge
+                    // leaves no trail.
+                    var low = now.x;
+                    var high = now.x;
+                    for (var y = -1; y <= 1; y++) {
+                        for (var x = -1; x <= 1; x++) {
+                            let t = textureLoad(raw, clamp(half + vec2<i32>(x, y), vec2<i32>(0), size - 1), 0).x;
+                            low = min(low, t);
+                            high = max(high, t);
+                        }
+                    }
+                    out.x = mix(now.x, clamp(old.x, low, high), KEEP);
+                }
+            }
+        }
+    }
+    textureStore(history, half, out);
+    textureStore(shown, half, out);
 }

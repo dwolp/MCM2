@@ -171,11 +171,11 @@ struct Targets {
     /// each for either of the two histories being the one written.
     blend_groups: [wgpu::BindGroup; 2],
     blur_groups: [wgpu::BindGroup; 2],
-    /// The light shafts (rt_volume.wgsl), through the same blend and blur,
-    /// and blurred.
+    /// The light shafts (rt_volume.wgsl), at half size: traced, then
+    /// blended over time into either history and what shows.
     shaft_group: wgpu::BindGroup,
-    shaft_blend_groups: [wgpu::BindGroup; 2],
-    shaft_blur_groups: [wgpu::BindGroup; 2],
+    shaft_settle_groups: [wgpu::BindGroup; 2],
+    shaft_size: (u32, u32),
     shafts: wgpu::TextureView,
 }
 
@@ -187,6 +187,7 @@ struct Passes {
     blend: wgpu::ComputePipeline,
     blur: wgpu::ComputePipeline,
     shafts: wgpu::ComputePipeline,
+    settle: wgpu::ComputePipeline,
     /// The frame before's view and projection and camera, while the
     /// history holds it.
     before: Option<(glam::Mat4, glam::Vec3)>,
@@ -446,6 +447,7 @@ impl Scene {
                 cache: None,
             })
         };
+        let volume = module("rt shafts", include_str!("rt_volume.wgsl"));
         let passes = Passes {
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rt shadows"),
@@ -456,7 +458,8 @@ impl Scene {
             trace: compute("rt trace", &module("rt trace", include_str!("rt_shadow.wgsl")), "trace"),
             blend: compute("rt blend", &module("rt blend", include_str!("rt_temporal.wgsl")), "blend"),
             blur: compute("rt blur", &module("rt blur", include_str!("rt_blur.wgsl")), "blur"),
-            shafts: compute("rt shafts", &module("rt shafts", include_str!("rt_volume.wgsl")), "scatter"),
+            shafts: compute("rt shafts", &volume, "scatter"),
+            settle: compute("rt shafts settle", &volume, "settle"),
             before: None,
             targets: None,
             blank: shadow_texture(device, (1, 1)),
@@ -695,53 +698,42 @@ impl Scene {
         };
         let blend_groups = [0, 1].map(|w| blend(&raw, &histories, w));
         let blur_groups = [0, 1].map(|w| blur(&histories, &soft, w));
-        let shaft_raw = shadow_texture(device, size);
-        let shaft_histories = [shadow_texture(device, size), shadow_texture(device, size)];
-        let shafts = shadow_texture(device, size);
+        let shaft_size = (size.0.div_ceil(2), size.1.div_ceil(2));
+        let shaft_raw = shadow_texture(device, shaft_size);
+        let shaft_histories = [shadow_texture(device, shaft_size), shadow_texture(device, shaft_size)];
+        let shafts = shadow_texture(device, shaft_size);
         let shaft_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rt shafts"),
             layout: &p.shafts.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: p.params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&depth),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::AccelerationStructure(&self.tlas),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.cutouts.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.masks),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&raw),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::TextureView(&shaft_raw),
-                },
+                entry(0, p.params.as_entire_binding()),
+                entry(1, wgpu::BindingResource::TextureView(&depth)),
+                entry(2, wgpu::BindingResource::AccelerationStructure(&self.tlas)),
+                entry(3, self.cutouts.as_entire_binding()),
+                entry(4, wgpu::BindingResource::TextureView(&self.masks)),
+                entry(5, wgpu::BindingResource::Sampler(&self.sampler)),
+                entry(7, wgpu::BindingResource::TextureView(&shaft_raw)),
             ],
         });
-        let shaft_blend_groups = [0, 1].map(|w| blend(&shaft_raw, &shaft_histories, w));
-        let shaft_blur_groups = [0, 1].map(|w| blur(&shaft_histories, &shafts, w));
+        // Writing history `w`, reading the other.
+        let shaft_settle_groups = [0, 1].map(|w| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rt shafts settle"),
+                layout: &p.settle.get_bind_group_layout(0),
+                entries: &[
+                    entry(0, p.params.as_entire_binding()),
+                    entry(1, wgpu::BindingResource::TextureView(&depth)),
+                    entry(8, wgpu::BindingResource::TextureView(&shaft_raw)),
+                    entry(9, wgpu::BindingResource::TextureView(&shaft_histories[1 - w])),
+                    entry(10, wgpu::BindingResource::TextureView(&shaft_histories[w])),
+                    entry(11, wgpu::BindingResource::TextureView(&shafts)),
+                ],
+            })
+        });
         self.passes.targets = Some(Targets {
             shaft_group,
-            shaft_blend_groups,
-            shaft_blur_groups,
+            shaft_settle_groups,
+            shaft_size,
             shafts,
             size,
             depth,
@@ -808,24 +800,21 @@ impl Scene {
         pass.set_bind_group(0, &t.trace_group, &[]);
         pass.dispatch_workgroups(groups.0, groups.1, 1);
         if shafts {
+            let half = (t.shaft_size.0.div_ceil(8), t.shaft_size.1.div_ceil(8));
             pass.set_pipeline(&p.shafts);
             pass.set_bind_group(0, &t.shaft_group, &[]);
-            pass.dispatch_workgroups(groups.0, groups.1, 1);
+            pass.dispatch_workgroups(half.0, half.1, 1);
+            pass.set_pipeline(&p.settle);
+            pass.set_bind_group(0, &t.shaft_settle_groups[w], &[]);
+            pass.dispatch_workgroups(half.0, half.1, 1);
         }
         pass.set_pipeline(&p.blend);
         pass.set_bind_group(0, &t.blend_groups[w], &[]);
         pass.dispatch_workgroups(groups.0, groups.1, 1);
-        if shafts {
-            pass.set_bind_group(0, &t.shaft_blend_groups[w], &[]);
-            pass.dispatch_workgroups(groups.0, groups.1, 1);
-        }
         pass.set_pipeline(&p.blur);
         pass.set_bind_group(0, &t.blur_groups[w], &[]);
         pass.dispatch_workgroups(groups.0, groups.1, 1);
-        if shafts {
-            pass.set_bind_group(0, &t.shaft_blur_groups[w], &[]);
-            pass.dispatch_workgroups(groups.0, groups.1, 1);
-        }
+
     }
 
     /// Builds what has changed: the still parts the first time, the moving
@@ -988,6 +977,11 @@ fn colours_sized(rgba: &[u8], side: u32, to: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+/// A bind group entry.
+fn entry(binding: u32, resource: wgpu::BindingResource<'_>) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry { binding, resource }
 }
 
 /// A texture the shadows are traced in, `size` pixels.
