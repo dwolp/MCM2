@@ -185,3 +185,35 @@ fn sun_point(p: vec3<f32>) -> f32 {
     }
     return rt_sunlit(p);
 }
+
+// The bikes' headlights' light at `world` facing `n` (rt_shadow.wgsl
+// traced it, shadows and all, for each pixel): read as the shadows are,
+// from the pixels round about whose surface is about as far away.
+fn headlight_at(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec3<f32> {
+    if (enh.headlights.x < 0.5) {
+        return vec3<f32>(0.0);
+    }
+    let c = enh.view_proj * vec4<f32>(world, 1.0);
+    if (c.w <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let size = vec2<i32>(textureDimensions(rt_lamps));
+    let uv = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+    let at = uv * vec2<f32>(size) - 0.5;
+    let base = vec2<i32>(floor(at));
+    let f = fract(at);
+    let tolerance = dist * 0.03 + 0.3;
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var k = 0; k < 4; k++) {
+        let o = vec2<i32>(k & 1, k >> 1u);
+        let q = clamp(base + o, vec2<i32>(0), size - 1);
+        let t = textureLoad(rt_lamps, q, 0);
+        let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+        if (abs(textureLoad(rt_shadows, q, 0).y - dist) < tolerance) {
+            sum += t.rgb * w;
+            weight += w;
+        }
+    }
+    return sum / max(weight, 1e-4);
+}

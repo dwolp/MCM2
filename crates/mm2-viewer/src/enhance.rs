@@ -68,6 +68,13 @@ pub struct EnhGlobals {
     /// The terrain for the reflections: ft a terrain unit, and terrain
     /// units the ground's colour map spans.
     pub terrain: [f32; 4],
+    /// x how much it is night; yzw the track's own light on level ground.
+    pub night: [f32; 4],
+    /// x whether the bikes' headlights are traced, y how many glow.
+    pub headlights: [f32; 4],
+    /// Each glowing headlight: its place and how strongly (drawing
+    /// coordinates).
+    pub lamps: [[f32; 4]; LAMPS],
 }
 
 /// What the shared group is made of, kept to make it again.
@@ -142,6 +149,9 @@ pub struct Shared {
     /// The ruts' map, to draw the tyres into: its view and texels a side.
     pub ruts: (wgpu::TextureView, u32),
 }
+
+/// The most headlights that glow on the bikes.
+pub const LAMPS: usize = 8;
 
 /// Texels a side of the ruts' map, over the whole terrain.
 pub const RUT_SIDE: u32 = 8192;
@@ -236,6 +246,7 @@ impl Shared {
                 texture(D::D2, float),
                 storage,
                 storage,
+                texture(D::D2, T::Float { filterable: false }),
             ];
             entries.extend(types.into_iter().zip(8..).map(|(ty, binding)| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -464,6 +475,7 @@ fn ray_traced(source: &str) -> String {
         "rt_ground: texture_2d<f32>",
         "<storage, read> rt_points: array<f32>",
         "<storage, read> rt_terrain: array<u32>",
+        "rt_lamps: texture_2d<f32>",
     ];
     let mut bindings = line.to_string();
     for (d, binding) in declared.iter().zip(8..) {
@@ -480,7 +492,8 @@ fn ray_traced(source: &str) -> String {
         .replacen(line, &bindings, 1)
         .replacen("fn sun_visible(", "fn sun_mapped(", 1)
         .replacen("fn reflection(", "fn reflection_sky(", 1)
-        .replacen("fn sun_point(", "fn sun_point_mapped(", 1);
+        .replacen("fn sun_point(", "fn sun_point_mapped(", 1)
+        .replacen("fn headlight_at(", "fn headlight_none(", 1);
     format!("enable wgpu_ray_query;\n{source}\n{}", include_str!("enhanced_rt.wgsl"))
 }
 
@@ -555,6 +568,8 @@ pub struct Daylight {
     pub cover: f32,
     pub wet: f32,
     pub rain: f32,
+    /// How much it is night, 0 to 1: the sun down and the moon up.
+    pub night: f32,
 }
 
 /// The light and sky from the scene's own `lights` at `time` (an hour,
@@ -582,6 +597,22 @@ pub fn daylight(lights: &crate::renderer::SceneLights, time: Option<f32>, weathe
         let tint = Vec3::new(0.75, 0.8, 1.0).lerp(Vec3::ONE, smoothstep(0.05, 0.4, up));
         l.ambient = (tint * ambient * (0.5 + 0.5 * smoothstep(-0.1, 0.3, up))).into();
     }
+    // After dusk and before dawn the moon lights the scene: high and to
+    // the side away from where the sun set, faint and blue, and the sky's
+    // light round about fainter still.
+    // The sky's colour goes by where the sun is, not the moon.
+    let sun_up = l.to_sun.y;
+    let night = smoothstep(-0.02, -0.15, sun_up);
+    if night > 0.0 {
+        let flat = Vec3::new(lights.to_sun.x, 0.0, lights.to_sun.z).normalize_or(Vec3::X);
+        let moon = (Vec3::new(-flat.z, 0.0, flat.x) * 0.7 + Vec3::Y * 0.75).normalize();
+        l.to_sun = moon.lerp(l.to_sun, 1.0 - night).normalize();
+        // Without ray tracing there are no headlights: the moon brighter,
+        // so the track still shows.
+        let lift = if crate::graphics::ray_traced() { 1.0 } else { 2.5 };
+        l.sun = (Vec3::from(l.sun).lerp(MOON * lift, night)).into();
+        l.ambient = (Vec3::from(l.ambient).lerp(NIGHT_AMBIENT * lift, night)).into();
+    }
     let (cover, wet, rain) = match weather {
         Weather::Clear => (0.42, 0.0, 0.0),
         Weather::Overcast => (0.85, 0.15, 0.0),
@@ -592,7 +623,7 @@ pub fn daylight(lights: &crate::renderer::SceneLights, time: Option<f32>, weathe
     let sun = Vec3::from(l.sun);
     l.sun = (sun * dim).into();
     l.ambient = (Vec3::from(l.ambient) + sun * (1.0 - dim) * 0.35).into();
-    let up = l.to_sun.y;
+    let up = sun_up;
     let day = smoothstep(-0.08, 0.25, up);
     let dusk = smoothstep(0.35, 0.02, up) * smoothstep(-0.12, 0.0, up);
     let zenith = Vec3::new(0.02, 0.025, 0.06).lerp(Vec3::new(0.13, 0.27, 0.62), day);
@@ -606,8 +637,13 @@ pub fn daylight(lights: &crate::renderer::SceneLights, time: Option<f32>, weathe
         cover,
         wet,
         rain,
+        night,
     }
 }
+
+/// The moon's light and the night sky's, linear (0..1 of the game's).
+const MOON: Vec3 = Vec3::new(0.09, 0.11, 0.17);
+const NIGHT_AMBIENT: Vec3 = Vec3::new(0.035, 0.04, 0.065);
 
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);

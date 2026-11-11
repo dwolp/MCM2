@@ -78,6 +78,12 @@ fn apply_haze(c: vec3<f32>, world: vec3<f32>, dist: f32) -> vec3<f32> {
     return mix(c, globals.fog.rgb, fog);
 }
 
+// The bikes' headlights' light at `world` facing `n`: none without ray
+// tracing (enhanced_rt.wgsl's takes its place).
+fn headlight_at(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec3<f32> {
+    return vec3<f32>(0.0);
+}
+
 // Whether the sun reaches `p`, a point in the air, past what is solid: -1
 // here, for not known (the shadow maps are read per pixel); the ray-traced
 // scene's (enhanced_rt.wgsl) answers when it is drawn.

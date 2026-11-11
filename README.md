@@ -346,6 +346,13 @@ floor in place of the stadium's one pretend sun: each bike, rider and
 flagman casts a fan of shadows, one toward each nearby bank, and the
 stands and the gate cast too. The open-air stadiums keep the sun.
 
+**Night races.** Time of day has **Night**: the sun down, a faint blue
+moon casting soft shadows, and the track dark but for the bikes'
+headlights. Each bike's headlight is a spotlight traced like the sun, so
+the riders ahead cast long shadows down the beams, the lamps glow, and a
+rider coming up behind lights you up. Without ray tracing there are no
+headlights and the moon is brighter, so the track still shows.
+
 **Reflections.** Where something shiny used to show only a painted sky, a
 ray now finds what is really there, lit by the sun where the sun reaches
 it.

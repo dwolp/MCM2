@@ -1196,12 +1196,27 @@ fn feel_wrecks(race: &mut Race, renderer: &TerrainRenderer) {
     }
 }
 
+/// Where a bike's headlight is on the bike (its own coordinates, ft), and
+/// which way along its own z it shines (+1 or -1).
+const HEADLIGHT: Vec3 = Vec3::new(0.0, 3.2, -2.4);
+const HEADLIGHT_WAY: f32 = -1.0;
+
 fn show(race: &Race, track: &Track, renderer: &mut TerrainRenderer, eye: Vec3, view: Option<cues::Eye>) {
     // The player's shadow: the bike and rider, seen from the sun.
     {
         let me = &race.racers[race.player];
         renderer.set_shadow([me.object, me.object + 1], me.bike.position() + Vec3::Y * 1.5, track.sun);
     }
+    // Each bike's headlight: up front, about at the bars.
+    let lamps: Vec<(Vec3, Vec3)> = race
+        .racers
+        .iter()
+        .map(|r| {
+            let place = r.bike.place();
+            (place.transform_point3(HEADLIGHT), place.transform_vector3(Vec3::Z * -1.0 * HEADLIGHT_WAY).normalize_or(r.bike.forward()))
+        })
+        .collect();
+    renderer.set_headlights(&lamps);
     for (i, r) in race.racers.iter().enumerate() {
         // A ghost race's ghost is see-through.
         let ghost = race.ghost == Some(i);

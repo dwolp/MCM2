@@ -161,6 +161,8 @@ struct Moving {
 
 /// The textures the shadows are traced in, at the scene's size.
 struct Targets {
+    /// The headlights' light at each pixel (rt_shadow.wgsl).
+    lamps: wgpu::TextureView,
     size: (u32, u32),
     /// The nearest surface's depth for each pixel, drawn first.
     depth: wgpu::TextureView,
@@ -210,9 +212,12 @@ struct Params {
     previous: [[f32; 4]; 4],
     history: [f32; 4],
     /// x how many floodlights light the shadows in place of the sun (0
-    /// outdoors).
+    /// outdoors); y how many headlights, z how much it is night.
     lights: [f32; 4],
 }
+
+/// The most headlights traced.
+const MOST_HEADLIGHTS: usize = 16;
 
 /// What the scene's shaders read the traced shadows from.
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -240,6 +245,9 @@ pub struct Scene {
     /// (middle, spread), (how many lamps, ...); and how many.
     floodlights: wgpu::Buffer,
     floodlight_count: u32,
+    /// The bikes' headlights this frame, two vec4s each: (place, 0), (way,
+    /// 0).
+    headlights: wgpu::Buffer,
     reflections: Reflections,
     pub tlas: wgpu::Tlas,
     terrain: Built,
@@ -489,7 +497,14 @@ impl Scene {
             contents: bytemuck::cast_slice(&lamps),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        let headlights = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rt headlights"),
+            size: (MOST_HEADLIGHTS * 32) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Scene {
+            headlights,
             floodlights,
             floodlight_count,
             passes,
@@ -555,6 +570,7 @@ impl Scene {
             R::TextureView(&r.ground),
             self.terrain.vertices.as_entire_binding(),
             terrain.as_entire_binding(),
+            R::TextureView(self.passes.targets.as_ref().map_or(&self.passes.blank, |t| &t.lamps)),
         ]
     }
 
@@ -593,6 +609,7 @@ impl Scene {
             .create_view(&Default::default());
         let raw = shadow_texture(device, size);
         let soft = shadow_texture(device, size);
+        let lamps = shadow_texture(device, size);
         // Where each pixel's surface was on screen a frame ago, for those on
         // moving models: the pixels' move, and how far it was then.
         let motion = shadow_texture(device, size);
@@ -673,6 +690,14 @@ impl Scene {
                 wgpu::BindGroupEntry {
                     binding: 14,
                     resource: self.floodlights.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: self.headlights.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: wgpu::BindingResource::TextureView(&lamps),
                 },
             ],
         });
@@ -766,6 +791,7 @@ impl Scene {
             })
         });
         self.passes.targets = Some(Targets {
+            lamps,
             shaft_group,
             shaft_settle_groups,
             shaft_size,
@@ -808,7 +834,17 @@ impl Scene {
         fovy: f32,
         shafts: bool,
         indoors: bool,
+        headlights: &[(glam::Vec3, glam::Vec3)],
+        night: f32,
     ) {
+        let lamps: Vec<[f32; 8]> = headlights
+            .iter()
+            .take(MOST_HEADLIGHTS)
+            .map(|(at, way)| [at.x, at.y, at.z, 0.0, way.x, way.y, way.z, 0.0])
+            .collect();
+        if !lamps.is_empty() {
+            queue.write_buffer(&self.headlights, 0, bytemuck::cast_slice(&lamps));
+        }
         let p = &mut self.passes;
         let Some(t) = &p.targets else { return };
         p.frame = p.frame.wrapping_add(1);
@@ -823,7 +859,7 @@ impl Scene {
             size: [t.size.0 as f32, t.size.1 as f32, (p.frame % 64) as f32, 2.0 * (fovy / 2.0).tan() / t.size.1 as f32],
             previous: previous.to_cols_array_2d(),
             history,
-            lights: [if indoors { self.floodlight_count as f32 } else { 0.0 }, 0.0, 0.0, 0.0],
+            lights: [if indoors { self.floodlight_count as f32 } else { 0.0 }, lamps.len() as f32, night, 0.0],
         };
         p.before = Some((view_proj, camera));
         let w = (p.frame % 2) as usize;

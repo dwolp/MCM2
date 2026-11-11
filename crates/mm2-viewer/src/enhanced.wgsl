@@ -43,4 +43,11 @@ struct Enh {
     // The terrain for the reflections: ft a terrain unit, and terrain
     // units the ground's colour map spans.
     terrain: vec4<f32>,
+    // x how much it is night (0 to 1); yzw the track's own light on level
+    // ground, which the ground's painted light is taken against at night.
+    night: vec4<f32>,
+    // Each bike's headlight, ray traced (rt.rs): x on, y how many glow.
+    headlights: vec4<f32>,
+    // Each glowing headlight's place and strength.
+    lamps: array<vec4<f32>, 8>,
 };

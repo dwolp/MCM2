@@ -195,9 +195,10 @@ impl Enhanced {
                     "noon" => 12.5,
                     "afternoon" => 15.5,
                     "dusk" | "sunset" => 18.0,
+                    "night" => 23.0,
                     _ => match t.parse::<f32>() {
                         Ok(h) if (0.0..=24.0).contains(&h) => h,
-                        _ => return Err(format!("time must be dawn, morning, noon, afternoon, dusk or an hour 0-24, not {t}")),
+                        _ => return Err(format!("time must be dawn, morning, noon, afternoon, dusk, night or an hour 0-24, not {t}")),
                     },
                 });
                 continue;

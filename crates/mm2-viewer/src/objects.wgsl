@@ -329,6 +329,17 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         albedo = mix(albedo, dirt * (0.7 + 0.6 * luminance(texel.rgb)) * (0.85 + 0.3 * splat), caked);
     }
     var colour = albedo * light;
+    if (in.mode < UNLIT) {
+        colour += albedo * headlight_at(in.world, n, dist);
+    }
+    // The headlights themselves glow at night, on the moving models.
+    if (in.moving > 0.5) {
+        for (var i = 0u; i < u32(enh.headlights.y); i++) {
+            let lamp = enh.lamps[i];
+            let near = 1.0 - smoothstep(0.08, 0.3, length(in.world - lamp.xyz));
+            colour += vec3<f32>(1.0, 0.95, 0.85) * near * 4.0 * lamp.w;
+        }
+    }
     if (caked > 0.0 && enh.world.y > 0.3 && in.mode < UNLIT) {
         // Wet mud shines.
         let v = normalize(globals.camera.xyz - in.world);

@@ -361,8 +361,12 @@ fn new_ground(in: VertexOut, painted: vec3<f32>, n: vec3<f32>, dist: f32) -> vec
         albedo *= 1.0 - puddle * 0.4;
     }
     let sun = sun_visible(in.world, n, dist, 0.4);
-    let light = real_light(bent, sun) / max(flat_light, vec3<f32>(0.05));
+    // At night, against the track's own light, so the ground goes dark.
+    let against = mix(flat_light, enh.night.yzw, enh.night.x);
+    let light = real_light(bent, sun) / max(against, vec3<f32>(0.05));
     var lit = albedo * pow(max(light, vec3<f32>(0.0)), vec3<f32>(2.2)) * 1.05;
+    // The bikes' headlights, as they light the ground's own colour.
+    lit += albedo * headlight_at(in.world, n, dist);
     if (puddle > 0.0) {
         let eye = normalize(globals.camera.xyz - in.world);
         let r = reflect(-eye, n);
@@ -439,7 +443,8 @@ fn enhanced_ground(in: VertexOut) -> vec4<f32> {
     // small bumps the texture suggests, and the objects' shadows, change
     // it, as they change the light the game would give the ground here.
     var light = vec3<f32>(1.0 - shadow_at(in.world));
-    let plain = max(game_light(n, 1.0), vec3<f32>(0.05));
+    // At night against the track's own light, so the ground goes dark.
+    let plain = max(mix(game_light(n, 1.0), enh.night.yzw, enh.night.x), vec3<f32>(0.05));
     if (enh.flags.y > 0.5) {
         let sun = sun_visible(in.world, n, dist, 0.4);
         light = game_light(n, sun) / plain;
@@ -449,6 +454,7 @@ fn enhanced_ground(in: VertexOut) -> vec4<f32> {
         light = game_light(bumped, sun) / plain;
     }
     var lit = colour * pow(max(light, vec3<f32>(0.0)), vec3<f32>(2.2));
+    lit += colour * headlight_at(in.world, n, dist);
     if (enh.more.x > 0.5) {
         lit = new_ground(in, colour, n, dist);
     }

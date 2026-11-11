@@ -18,7 +18,8 @@ struct Params {
     // one, yzw where its camera was (rt_temporal.wgsl).
     previous: mat4x4<f32>,
     history: vec4<f32>,
-    // x how many floodlights light the shadows in place of the sun.
+    // x how many floodlights light the shadows in place of the sun; y how
+    // many headlights, z how much it is night.
     lights: vec4<f32>,
 };
 
@@ -44,6 +45,20 @@ struct Params {
 @group(0) @binding(13) var motion: texture_storage_2d<rgba16float, write>;
 // A domed stadium's floodlights (rt.rs): (middle, spread), (lamps, ...).
 @group(0) @binding(14) var<storage, read> floodlights: array<vec4<f32>>;
+// The bikes' headlights: (place, 0), (way, 0); and their light at each
+// pixel, for the scene's shaders.
+@group(0) @binding(15) var<storage, read> headlights: array<vec4<f32>>;
+@group(0) @binding(16) var lamps: texture_storage_2d<rgba16float, write>;
+
+// A headlight's colour and strength (a ft away), how wide its beam is
+// (the cosines of where it is full and where it ends), and how far it
+// reaches, ft.
+const LAMP: vec3<f32> = vec3<f32>(1.0, 0.92, 0.78) * 140.0;
+// Close to the lamp its light grows no more than this.
+const LAMP_MOST: f32 = 2.5;
+const BEAM_FULL: f32 = 0.95;
+const BEAM_EDGE: f32 = 0.62;
+const LAMP_REACH: f32 = 350.0;
 
 // How far the ray now being traced may go: to the sun, or short of the
 // floodlight it goes to (its lamps are on the stadium's own panels).
@@ -217,6 +232,68 @@ fn on_moving(world: vec3<f32>, to_eye: vec3<f32>, dist: f32, pixel: vec2<i32>) -
     return 1.0;
 }
 
+// The way out of the surface at pixel `p` (`world`), from its neighbours'
+// depths: the nearer on each side, so an edge does not bend it.
+fn surface_normal(p: vec2<i32>, world: vec3<f32>) -> vec3<f32> {
+    let size = vec2<i32>(params.size.xy);
+    var pts: array<vec3<f32>, 4>;
+    let offs = array<vec2<i32>, 4>(vec2<i32>(-1, 0), vec2<i32>(1, 0), vec2<i32>(0, -1), vec2<i32>(0, 1));
+    for (var k = 0; k < 4; k++) {
+        let q = clamp(p + offs[k], vec2<i32>(0), size - 1);
+        let d = textureLoad(depth, q, 0);
+        let ndc = vec2<f32>((f32(q.x) + 0.5) / params.size.x * 2.0 - 1.0, 1.0 - (f32(q.y) + 0.5) / params.size.y * 2.0);
+        let h = params.inverse_view_proj * vec4<f32>(ndc, d, 1.0);
+        pts[k] = h.xyz / h.w;
+    }
+    let dx = select(world - pts[0], pts[1] - world, length(pts[1] - world) < length(world - pts[0]));
+    let dy = select(world - pts[2], pts[3] - world, length(pts[3] - world) < length(world - pts[2]));
+    var n = normalize(cross(dx, dy) + vec3<f32>(0.0, 1e-6, 0.0));
+    if (dot(n, params.camera.xyz - world) < 0.0) {
+        n = -n;
+    }
+    return n;
+}
+
+// The bikes' headlights' light reaching `world` (pixel `p`, `dist` ft
+// from the camera): each spot's beam, falling off with the square of how
+// far, as squarely as it meets the surface, where nothing stands between.
+fn headlit(world: vec3<f32>, p: vec2<i32>, dist: f32) -> vec3<f32> {
+    let count = u32(params.lights.y);
+    if (count == 0u) {
+        return vec3<f32>(0.0);
+    }
+    let n = surface_normal(p, world);
+    var sum = vec3<f32>(0.0);
+    for (var j = 0u; j < count; j++) {
+        let at = headlights[j * 2u].xyz;
+        let way = headlights[j * 2u + 1u].xyz;
+        let to = at - world;
+        let d = length(to);
+        // Not its own bike, just behind the lamp.
+        if (d > LAMP_REACH || d < 2.0) {
+            continue;
+        }
+        let l = to / d;
+        let into = smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way));
+        let beam = into * into;
+        let facing = dot(n, l);
+        if (beam <= 0.0 || facing <= 0.0) {
+            continue;
+        }
+        // Off the surface; short of the lamp and its own bike's front.
+        let off = 0.04 + dist * 0.0006;
+        var rq: ray_query;
+        rayQueryInitialize(&rq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, 0xffu, 0.0, max(d - 1.2, 0.0), world + n * off, l));
+        rayQueryProceed(&rq);
+        if (rayQueryGetCommittedIntersection(&rq).kind != RAY_QUERY_INTERSECTION_NONE) {
+            continue;
+        }
+        let fade = 1.0 - smoothstep(LAMP_REACH * 0.7, LAMP_REACH, d);
+        sum += LAMP * beam * facing * fade / (d * d + 30.0);
+    }
+    return min(sum, vec3<f32>(LAMP_MOST)) * params.lights.z;
+}
+
 // How much a bank of `lamps` lamps `d` away counts: by its lamps and the
 // square of how far, and that squared again, so the nearest bright bank
 // casts a clear shadow and the others fainter ones.
@@ -305,6 +382,7 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     if (d >= 1.0) {
         textureStore(traced, vec2<i32>(id.xy), vec4<f32>(1.0, 60000.0, 0.0, 0.0));
         textureStore(motion, vec2<i32>(id.xy), vec4<f32>(0.0));
+        textureStore(lamps, vec2<i32>(id.xy), vec4<f32>(0.0));
         return;
     }
     let ndc = vec2<f32>(
@@ -330,6 +408,7 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     let side = normalize(cross(to_sun, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(to_sun.y) > 0.99)));
     let up = cross(side, to_sun);
     let turn = noise(vec2<f32>(id.xy) + params.size.z * 5.588238) * 6.2831853;
+    textureStore(lamps, vec2<i32>(id.xy), vec4<f32>(headlit(world, vec2<i32>(id.xy), dist), 0.0));
     if (params.lights.x > 0.0) {
         // Each pixel's points across the banks held still from frame to
         // frame: the banks are wide, their soft edges wider than the blur

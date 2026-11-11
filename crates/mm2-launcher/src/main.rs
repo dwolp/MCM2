@@ -22,8 +22,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const TIMES: [(&str, &str); 6] =
-    [("", "Track's own"), ("dawn", "Dawn"), ("morning", "Morning"), ("noon", "Noon"), ("afternoon", "Afternoon"), ("dusk", "Dusk")];
+const TIMES: [(&str, &str); 7] = [
+    ("", "Track's own"),
+    ("dawn", "Dawn"),
+    ("morning", "Morning"),
+    ("noon", "Noon"),
+    ("afternoon", "Afternoon"),
+    ("dusk", "Dusk"),
+    ("night", "Night (headlights with ray tracing)"),
+];
 const WEATHERS: [(&str, &str); 3] = [("clear", "Clear"), ("overcast", "Overcast"), ("rain", "Rain")];
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(232, 120, 32);
 /// The window icon and the logo at the top (drawn from `assets/icon/*.svg`).
