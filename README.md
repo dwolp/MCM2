@@ -63,6 +63,8 @@ too, and each has a command-line switch.
 | [Settings in the game](#settings-in-the-game) | The Tweaks box, and the window size changed from the game's Options | Fork only |
 | [Play without the launcher](#play-without-the-launcher) | The game starts with the launcher's settings on its own, and a button makes a "Play MM2" desktop shortcut | Fork only |
 | [One-lap races](#one-lap-races) | National and Supercross can be 1 lap long | Fork only |
+| [Dust clouds with shadows](#dust-clouds-with-shadows) | The enhanced look's dust behind the bikes shades itself and casts soft shadows; smoother, without square blotches | Fork only |
+| [Ray tracing](#ray-tracing) | The enhanced look's sun shadows traced as rays, sharp and reaching to the haze, and wet ground and bike paint reflecting what is round them | Fork only |
 
 ### Ultrawide support
 
@@ -291,6 +293,66 @@ shared by the launcher and the game.
 
 The laps list for National and Supercross races started at 2; now it starts
 at 1, as for Baja and Enduro.
+
+### Dust clouds with shadows
+
+The enhanced look's dust clouds behind the bikes were lit as flat cards:
+a puff only went dark when its top was in a shadow. Now the sun sees the
+dust too. Each frame the puffs are drawn from the sun into a small map of
+how thick the dust is along each of its rays, and how deep into the cloud
+that thickness lies. So:
+
+* A cloud is bright on its sunny side and dim underneath and behind,
+  thicker clouds more so.
+* It casts a soft shadow on the ground, the bikes and riders in it, and
+  the dust beyond it.
+* What is between a cloud and the sun is not shaded by it.
+
+The dust's texture is also smoother: its noise was laid on a square grid
+that showed as little square blotches up close. It costs well under a
+millisecond a frame. With ray tracing on, each puff also asks the scene
+itself whether it is in the sun.
+
+### Ray tracing
+
+**Ray tracing: shadows and reflections** in the launcher's Graphics, under
+Individual effects (`--enhanced=raytracing`), off by default. The graphics
+card traces rays through the whole track (the hills, every object, the
+bikes and the riders) for two things.
+
+**Shadows.** For each pixel on screen, rays toward the sun say whether it
+is lit, in place of the shadow maps.
+
+* Sharp next to what casts them and softer the farther they fall, as real
+  shadows are: a rider's shadow is crisp, a tall tree's crown is a soft
+  dapple.
+* No end to them: the shadow maps stopped about 500 ft out, these reach to
+  the haze.
+* The hills cast shadows too, long ones late in the day.
+* Thin things show: poles, wires and fences cast lines, not smudges.
+* Leaves and fences let the light through their gaps.
+* They hold still: each frame's rays are blended with the frames before
+  where the same place was, following the bikes, riders and train as they
+  move, and at a shadow's edge more rays are traced (as in OpenMM2's
+  ray traced shadows).
+
+**Reflections.** Where something shiny used to show only a painted sky, a
+ray now finds what is really there, lit by the sun where the sun reaches
+it.
+
+* In the rain, puddles mirror the riders, poles, trees and gantries round
+  them, and the wet track has a dim, rippled sheen that brightens toward
+  the distance, as wet ground does.
+* The bikes' paint and plastic catch the ground and the scenery round
+  them.
+
+It needs **Sun shadows** on, a graphics card that can trace rays (NVIDIA
+RTX, AMD RX 6000 or newer) and the Vulkan driver; on other cards the
+usual look shows and the game says so in `last-run.log`. It costs some
+frame rate: at 3440×1440 on an RTX 4070, on High, a frame takes about
+11 ms on Morenci Mine and 16 ms in the forest of Iron Mountain (about 90
+and 64 frames a second), where the shadow maps manage 120 to 150. Indoors, as before, only the
+bikes, riders and gates cast shadows.
 
 ## Playing this fork
 

@@ -195,6 +195,10 @@ struct Enhanced {
     /// was last frame (drawing coordinates).
     mud: Vec<(f32, Option<Vec3>)>,
     post: crate::post::Post,
+    /// The scene for the ray-traced shadows, when they are drawn, and the
+    /// terrain's pipeline for their depth pass.
+    rt: Option<crate::rt::Scene>,
+    rt_depth: Option<wgpu::RenderPipeline>,
 }
 
 impl TerrainRenderer {
@@ -272,7 +276,8 @@ impl TerrainRenderer {
                 tile_map[(tz * tiles_per_side + tx) as usize] = t.texture;
             }
         }
-        let textures = upload_textures(device, queue, textures);
+        let images = textures;
+        let textures = upload_textures(device, queue, images);
         let tile_map = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
@@ -357,8 +362,12 @@ impl TerrainRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let mut rt = (upgrades.is_some() && crate::graphics::ray_traced()).then(|| {
+            let geometry = objects.rt_geometry(device.limits().max_texture_array_layers);
+            crate::rt::Scene::new(device, queue, terrain, images, &geometry)
+        });
         let enhanced = upgrades.map(|_| {
-            let shared = crate::enhance::Shared::new(device, queue, upgrades.is_some_and(|e| e.ruts));
+            let shared = crate::enhance::Shared::new(device, queue, upgrades.is_some_and(|e| e.ruts), rt.as_ref());
             use crate::enhance::{sampler, texture, uniform};
             use wgpu::{ShaderStages as S, TextureSampleType as T, TextureViewDimension as D};
             let float = T::Float { filterable: true };
@@ -466,7 +475,7 @@ impl TerrainRenderer {
                 crate::rain::RainRenderer::new(device, &layout, &shared.layout, format, samples, DEPTH_FORMAT)
             }),
             dust: upgrades.is_some_and(|e| e.dust).then(|| {
-                crate::dust::DustRenderer::new(device, &layout, &shared.layout, format, samples, DEPTH_FORMAT)
+                crate::dust::DustRenderer::new(device, &layout, &shared.layout, format, samples, DEPTH_FORMAT, &shared.buffer)
             }),
             grass: upgrades.is_some_and(|e| e.grass).then(|| {
                 crate::grass::GrassRenderer::new(device, queue, terrain, &layout, &shared.layout, format, samples, DEPTH_FORMAT)
@@ -474,9 +483,48 @@ impl TerrainRenderer {
             smooth: upgrades.is_some_and(|e| e.smooth).then(|| {
                 crate::smooth::SmoothGround::new(device, queue, terrain, &shader, &layout, &shared.layout, format, samples, DEPTH_FORMAT)
             }),
+            rt_depth: rt.is_some().then(|| {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("rt terrain depth"),
+                    bind_group_layouts: &[Some(&layout), Some(&shared.layout)],
+                    immediate_size: 0,
+                });
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("rt terrain depth"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<Vertex>() as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![0 => Float32, 1 => Snorm8x4],
+                        })],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_rt_depth"),
+                        compilation_options: Default::default(),
+                        targets: &[],
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: crate::rt::DEPTH_FORMAT,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            }),
             terrain: terrain_pipeline,
             shared,
             layout,
+            rt: None,
         });
         let objects = ObjectRenderer::new(
             device,
@@ -488,6 +536,17 @@ impl TerrainRenderer {
             samples,
             enhanced.as_ref().map(|e| &e.shared.layout),
         );
+        if let (Some(rt), Some(o)) = (&mut rt, &objects) {
+            let (vertices, nodes) = o.posing();
+            rt.attach(device, vertices, nodes);
+        }
+        let mut enhanced = enhanced;
+        if let Some(e) = &mut enhanced {
+            if let Some(rt) = &rt {
+                e.shared.set_traced(device, rt);
+            }
+            e.rt = rt;
+        }
         TerrainRenderer {
             pipeline,
             vertices,
@@ -814,6 +873,10 @@ impl TerrainRenderer {
         // a radius about them; what it sees is laid over the ground.
         // The enhanced drawing's own shadows take its place.
         let sun_shadows = showing.is_some_and(|e| e.shadows) && self.objects.is_some();
+        // Ray traced, the cascades are not drawn; the hills cast too, so
+        // they need no objects.
+        let traced = showing.is_some_and(|e| e.shadows) && self.enhanced.as_ref().is_some_and(|e| e.rt.is_some());
+        let sun_shadows = sun_shadows || traced;
         let shadow = self.shadow.filter(|_| self.shadows_on && self.objects.is_some() && !sun_shadows);
         let shadow_view = shadow.map_or(Mat4::IDENTITY, |(_, centre, light)| {
             let to_sun = (-light).normalize_or(Vec3::Y);
@@ -846,6 +909,13 @@ impl TerrainRenderer {
             &mut self.runs,
         );
         let (cascades, texels) = crate::enhance::cascades(camera.view(), camera.fovy(aspect), aspect, lights.to_sun);
+        // The dust clouds as the sun sees them, round those near the eye.
+        let dust_view = self
+            .enhanced
+            .as_ref()
+            .filter(|_| showing.is_some_and(|e| e.dust))
+            .and_then(|e| e.dust.as_ref()?.bounds(camera.position))
+            .map(|(low, high)| crate::dust::sun_view(low, high, lights.to_sun));
         if let (Some(e), Some(on)) = (&self.enhanced, showing) {
             let flag = |b: bool| b as u32 as f32;
             let (h_start, density, _) = haze.unwrap_or((0.0, 0.0, far));
@@ -870,7 +940,14 @@ impl TerrainRenderer {
                 zenith: day.as_ref().map_or([0.0; 4], |d| d.zenith.extend(1.0).into()),
                 horizon: day.as_ref().map_or([0.0; 4], |d| d.horizon.extend(1.0).into()),
                 smooth: e.smooth.as_ref().filter(|_| on.smooth).map_or([0.0; 4], |g| g.uniform(camera.position)),
-                surfaces: [flag(on.surfaces), 0.0, 0.0, 0.0],
+                // Indoors (a stadium, with no sky box) only the moving
+                // models cast, as with the cascades.
+                surfaces: [flag(on.surfaces), flag(traced), 0.0, 0.0],
+                view_proj: (proj * camera.view()).to_cols_array_2d(),
+                ambient: lights.globals().0,
+                terrain: [self.grid[1], self.grid[2] * self.grid[3], 0.0, 0.0],
+                dust_view: dust_view.map_or(Mat4::IDENTITY, |(m, _)| m).to_cols_array_2d(),
+                dust: dust_view.map_or([0.0; 4], |(_, least)| [1.0, least, 0.0, 0.0]),
             };
             queue.write_buffer(&e.shared.buffer, 0, bytemuck::bytes_of(&enh));
         }
@@ -888,7 +965,7 @@ impl TerrainRenderer {
                 }
                 objects.set_shadow_view(queue, shadow_view);
             }
-            if sun_shadows {
+            if sun_shadows && !traced {
                 objects.set_cascades(queue, &cascades);
                 for (i, c) in cascades.iter().enumerate() {
                     objects.cull(1 + i, &crate::cull::Frustum::new(*c));
@@ -953,9 +1030,76 @@ impl TerrainRenderer {
             }
             if let Some(dust) = &mut e.dust {
                 dust.prepare(queue, camera.position);
+                if dust_view.is_some() {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("dust shadows"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &e.shared.dust,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    dust.draw_shadow(&mut pass, &e.group);
+                }
             }
         }
-        if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows) {
+        // The ray-traced shadows: the moving models posed, the nearest
+        // surface of each pixel drawn, and its shadow traced, before the
+        // scene that reads it.
+        if let Some(e) = self.enhanced.as_mut().filter(|e| traced && e.rt.is_some()) {
+            let rt = e.rt.as_mut().unwrap();
+            if rt.resize(device, scene) {
+                e.shared.set_traced(device, rt);
+            }
+            rt.update(&mut encoder);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("rt depth"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: rt.depth().unwrap(),
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if let Some(pipeline) = &e.rt_depth {
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &e.group, &[]);
+                    pass.set_bind_group(1, &e.shared.group, &[]);
+                    pass.set_vertex_buffer(0, self.vertices.slice(..));
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for run in &self.runs {
+                        pass.draw_indexed(run.clone(), 0, 0..1);
+                    }
+                }
+                // And the smooth ground round the eye, where it is drawn.
+                if let Some(smooth) = e.smooth.as_ref().filter(|_| showing.is_some_and(|s| s.smooth)) {
+                    smooth.draw_depth(&mut pass, &e.group, &e.shared.group);
+                }
+                if let Some(objects) = &self.objects {
+                    objects.draw_camera_depth(queue, &mut pass, proj * camera.view());
+                }
+            }
+            // Indoors (a stadium, with no sky box) only the moving models
+            // cast, as with the cascades.
+            let mask = if self.sky.is_none() { crate::rt::MOVING } else { 0xff };
+            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect));
+        }
+        if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows && !traced) {
             for (cascade, layer) in e.shared.layers.iter().enumerate() {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("sun shadows"),

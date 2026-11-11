@@ -366,9 +366,28 @@ fn new_ground(in: VertexOut, painted: vec3<f32>, n: vec3<f32>, dist: f32) -> vec
     if (puddle > 0.0) {
         let eye = normalize(globals.camera.xyz - in.world);
         let r = reflect(-eye, n);
-        let sky = mix(enh.horizon.rgb, enh.zenith.rgb, clamp(r.y, 0.0, 1.0));
+        var sky = mix(enh.horizon.rgb, enh.zenith.rgb, clamp(r.y, 0.0, 1.0));
         let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(eye, n), 0.0), 5.0);
+        // Ray traced, what stands round the water shows in it too.
+        if (fresnel * puddle > 0.02) {
+            sky = reflection(in.world + n * 0.1, r, sky);
+        }
         lit = mix(lit, sky, fresnel * puddle * 0.85);
+    }
+    // Ray traced, the rest of the wet ground is a dim, rippled mirror
+    // too, as water's glancing angles make it: the far track shines with
+    // the sky and what stands by it, the ground at the wheels hardly.
+    if (enh.world.y > 0.0 && enh.surfaces.y > 0.5) {
+        let eye = normalize(globals.camera.xyz - in.world);
+        let rn = normalize(mix(bent, n, 0.8));
+        let r = reflect(-eye, rn);
+        let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(eye, rn), 0.0), 5.0);
+        // Dirt is no lake: at most a sixth of what it shows is reflected.
+        let wet = min(fresnel * enh.world.y * (1.0 - puddle) * 0.35, 0.16);
+        if (wet > 0.03 && r.y > 0.0) {
+            let sky = mix(enh.horizon.rgb, enh.zenith.rgb, r.y);
+            lit = mix(lit, reflection(in.world + n * 0.1, r, sky), wet);
+        }
     }
     // A sheen off the smoother and the wet ground.
     let v = normalize(globals.camera.xyz - in.world);
@@ -392,6 +411,18 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     return enhanced_ground(in);
+}
+
+// The ray-traced shadows' depth pass (rt.rs): the game's mesh where it is
+// drawn, giving way to the smooth ground as fs_enhanced does, so the depth
+// is of the very ground the scene shows.
+@fragment
+fn fs_rt_depth(in: VertexOut) {
+    let p = in.terrain_xz - enh.fine_ground.xy;
+    let inside = vec2<f32>(SMOOTH_OVERLAP);
+    if (enh.fine_ground.w > 0.5 && all(p > inside) && all(p < vec2<f32>(enh.fine_ground.z) - inside)) {
+        discard;
+    }
 }
 
 @fragment

@@ -245,6 +245,92 @@ impl AnimatedModel {
 }
 
 impl ObjectMesh {
+    /// The objects as the ray-traced shadows see them (crate::rt): the
+    /// still triangles where they are drawn, the moving ones to be posed
+    /// each frame, and the cut-out textures' masks, at most `layers` of
+    /// them (past that a texture is taken as solid). A triangle whose
+    /// colour is see-through casts nothing.
+    pub fn rt_geometry(&self, layers: u32) -> crate::rt::Geometry {
+        let mut g = crate::rt::Geometry {
+            positions: self.vertices.iter().map(|v| v.position).collect(),
+            ..Default::default()
+        };
+        let mut moving_cutouts = Vec::new();
+        let mut moved: HashMap<u32, u32> = HashMap::new();
+        for (range, image) in &self.draws {
+            // The texture's colours, for what the reflections see.
+            let colour = match image.as_ref().and_then(|img| Some((img.levels.first()?, img.size))) {
+                Some((top, size)) if (g.colours.len() as u32) < layers => {
+                    g.colours.push(crate::rt::colours(top, size));
+                    (g.colours.len() - 1) as u32
+                }
+                _ => crate::rt::NO_COLOUR,
+            };
+            let layer = image.as_ref().and_then(|img| {
+                let top = img.levels.first()?;
+                let cut = top.chunks_exact(4).any(|p| p[3] < 128);
+                (cut && (g.masks.len() as u32) < layers).then(|| {
+                    let mask = crate::rt::mask(top, img.size);
+                    let pooled = crate::rt::Pooled::new(&mask);
+                    g.masks.push(mask);
+                    ((g.masks.len() - 1) as f32, pooled)
+                })
+            });
+            for tri in self.indices[range.start as usize..range.end as usize].chunks_exact(3) {
+                let v = [0, 1, 2].map(|k| &self.vertices[tri[k] as usize]);
+                if v.iter().all(|v| v.color[3] < 128) {
+                    continue;
+                }
+                let moving = v[0].node & NODE != 0;
+                // Only the triangles with both clear and solid texels need
+                // the rays to look at their mask; the clear ones cast
+                // nothing.
+                let layer = match &layer {
+                    Some((layer, pooled)) => match pooled.cover(v.map(|v| v.uv)) {
+                        crate::rt::Cover::Clear => continue,
+                        crate::rt::Cover::Solid => None,
+                        crate::rt::Cover::Mixed => Some(*layer),
+                    },
+                    None => None,
+                };
+                let cut = layer.is_some() as usize;
+                if let Some(layer) = layer {
+                    // How many of the mask's texels fall in a ft of the
+                    // triangle, for the rays to pick how blurred a mask
+                    // to look through.
+                    let [a, b, c] = v.map(|v| Vec3::from(v.position));
+                    let area = (b - a).cross(c - a).length();
+                    let [ua, ub, uc] = v.map(|v| glam::Vec2::from(v.uv));
+                    let uv_area = (ub - ua).perp_dot(uc - ua).abs() * (crate::rt::MASK_SIDE * crate::rt::MASK_SIDE) as f32;
+                    let density = if area > 1e-6 { (uv_area / area).sqrt() } else { 0.0 };
+                    let record = [v[0].uv[0], v[0].uv[1], v[1].uv[0], v[1].uv[1], v[2].uv[0], v[2].uv[1], layer, density];
+                    if moving {
+                        moving_cutouts.push(record);
+                    } else {
+                        g.cutouts.push(record);
+                    }
+                }
+                // What a reflection that meets it sees: its object
+                // vertices and texture.
+                g.hits[2 * moving as usize + cut].push([tri[0], tri[1], tri[2], colour]);
+                if moving {
+                    for &i in tri {
+                        let next = moved.len() as u32;
+                        let at = *moved.entry(i).or_insert_with(|| {
+                            g.sources.push(i);
+                            next
+                        });
+                        g.moving[cut].push(at);
+                    }
+                } else {
+                    g.still[cut].extend_from_slice(tri);
+                }
+            }
+        }
+        g.cutouts.extend(moving_cutouts);
+        g
+    }
+
     /// Bakes every placement whose model is in `models` and sets up every
     /// animation whose `.mcf` is in `objects`, with textures from the first
     /// of `textures` (named by their archive file) that has them, or their
@@ -758,7 +844,10 @@ impl ObjectRenderer {
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("object vertices"),
             contents: bytemuck::cast_slice(&mesh.vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            // The ray-traced shadows pose the moving models from them.
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | if crate::graphics::ray_traced() { wgpu::BufferUsages::STORAGE } else { wgpu::BufferUsages::empty() },
         });
         let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("object indices"),
@@ -1002,7 +1091,9 @@ impl ObjectRenderer {
                 multiview_mask: None,
                 cache: None,
             });
-            let cascades = (0..crate::enhance::CASCADES)
+            // One more view than the cascades: the camera's, for the
+            // ray-traced shadows' depth pass.
+            let cascades = (0..crate::enhance::CASCADES + 1)
                 .map(|_| {
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("sun cascade"),
@@ -1375,6 +1466,26 @@ impl ObjectRenderer {
                 queue.write_buffer(buffer, 0, bytemuck::bytes_of(&view.to_cols_array()));
             }
         }
+    }
+
+    /// The vertices and the nodes that move them, for the ray-traced
+    /// shadows to pose the moving models from (crate::rt::Scene::attach).
+    pub fn posing(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
+        (&self.vertices, &self.nodes)
+    }
+
+    /// Draws what the camera sees through `view_proj` into the ray-traced
+    /// shadows' depth pass (crate::rt), cut-outs cut out.
+    pub fn draw_camera_depth(&self, queue: &wgpu::Queue, pass: &mut wgpu::RenderPass<'_>, view_proj: Mat4) {
+        let Some(e) = &self.enhanced else { return };
+        let (buffer, group) = &e.cascades[crate::enhance::CASCADES];
+        queue.write_buffer(buffer, 0, bytemuck::bytes_of(&view_proj.to_cols_array()));
+        pass.set_pipeline(&e.depth);
+        pass.set_bind_group(0, &self.globals, &[]);
+        pass.set_bind_group(2, group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+        self.draw_seen(pass, 0);
     }
 
     /// Draws every object, or with `moving_only` only the moving models,

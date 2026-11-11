@@ -347,7 +347,11 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         let r = reflect(-v, bumped);
         let sky = mix(enh.horizon.rgb, enh.zenith.rgb, clamp(r.y, 0.0, 1.0));
         let ground = enh.horizon.rgb * 0.25;
-        let env = select(ground, sky, r.y > -0.05);
+        var env = select(ground, sky, r.y > -0.05);
+        // Ray traced, what is round about shows in the paint.
+        if (fresnel * gloss > 0.02) {
+            env = reflection(in.world + bumped * 0.05, r, env);
+        }
         let lit = sun_visible(in.world, n, dist, 0.0);
         let h = normalize(globals.to_sun.xyz + v);
         let coat = pow(max(dot(bumped, h), 0.0), 80.0) * 0.5 * lit;

@@ -564,9 +564,18 @@ impl Launcher {
                     ui.end_row();
                 });
                 ui.collapsing("Individual effects", |ui| {
+                    // Ray tracing takes the place of the sun's shadows, so
+                    // it needs those on.
+                    let shadows = UPGRADES.iter().zip(&s.upgrades).any(|(u, on)| u.0 == "shadows" && *on);
                     egui::Grid::new("upgrades").num_columns(2).show(ui, |ui| {
                         for (i, (u, on)) in UPGRADES.iter().zip(s.upgrades.iter_mut()).enumerate() {
-                            ui.checkbox(on, u.1);
+                            if u.0 == "raytracing" {
+                                ui.add_enabled(shadows, egui::Checkbox::new(on, u.1)).on_hover_text(
+                                    "Sharper, truer sun shadows, the hills casting them too, and wet ground and bike paint reflecting what is round them. Needs Sun shadows on and a graphics card that can trace rays (NVIDIA RTX, AMD RX 6000 or newer); on others the usual look shows.",
+                                );
+                            } else {
+                                ui.checkbox(on, u.1);
+                            }
                             if i % 2 == 1 {
                                 ui.end_row();
                             }

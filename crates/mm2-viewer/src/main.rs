@@ -13,6 +13,7 @@
 //!                                       // for you unless you steer
 //! mm2-viewer <TRACK.ENV> --hires <dir>   // with upscaled textures
 //! mm2-viewer ... --enhanced[=no-bloom,no-ao,...]  // modern graphics (F3 compares)
+//! mm2-viewer ... --enhanced=raytracing     // ray-traced shadows and reflections, where the GPU can
 //! mm2-viewer ... --fullscreen [--no-vsync]  // or Alt+Enter while playing
 //! mm2-viewer ... --show-fps                // or F2: the frame rate in the title and terminal
 //! mm2-viewer ... --centred-display         // ultrawide: the race display in a 16:9 middle
@@ -46,6 +47,7 @@
 mod bars;
 mod eco;
 mod enhance;
+mod rt;
 mod grass;
 mod ruts;
 mod dust;
@@ -2771,11 +2773,21 @@ async fn gpu_from(
         .await?;
     // Anti-aliasing with 2 or 8 samples, where the GPU has them.
     let specific = adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+    // Ray queries for the ray-traced shadows, only when they are asked
+    // for and the GPU has them: wgpu still calls them experimental.
+    let rays = graphics::wants_ray_tracing() && adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+    graphics::set_ray_queries(rays);
+    if graphics::wants_ray_tracing() && !rays {
+        eprintln!("ray tracing: this GPU cannot trace rays, so the shadow maps are drawn and nothing is reflected");
+    }
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("mm2"),
-            required_features: specific,
+            required_features: specific | if rays { wgpu::Features::EXPERIMENTAL_RAY_QUERY } else { wgpu::Features::empty() },
             required_limits: adapter.limits(),
+            // SAFETY: only ray queries are used of the experimental
+            // features, and only on a GPU that says it has them.
+            experimental_features: if rays { unsafe { wgpu::ExperimentalFeatures::enabled() } } else { wgpu::ExperimentalFeatures::disabled() },
             ..Default::default()
         })
         .await?;
@@ -2851,7 +2863,9 @@ async fn screenshot(
     height: u32,
 ) -> Result<(), BoxError> {
     let (adapter, device, queue) = gpu(None).await?;
-    eprintln!("rendering on {}", adapter.get_info().name);
+    let info = adapter.get_info();
+    let rt = adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+    eprintln!("rendering on {} ({:?}, ray queries: {rt})", info.name, info.backend);
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = track_renderer(track, &device, &queue, format);
     if let Some((d, tyres)) = dirt {

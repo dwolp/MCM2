@@ -58,6 +58,10 @@ pub struct Enhanced {
     /// Photo materials' grain (wood, metal, concrete, straw) on the
     /// objects of the trial track (materials::surfaced).
     pub surfaces: bool,
+    /// The sun's shadows traced as rays through the scene, in place of
+    /// the shadow maps, and reflections in wet ground and glossy paint,
+    /// where the GPU can (crate::rt); off unless asked.
+    pub raytracing: bool,
     /// How dirty the bikes start, 0 to 1.
     pub mud_start: f32,
     /// How strongly the new ground's detail shows, 0 to 1.
@@ -102,6 +106,7 @@ impl Default for Enhanced {
             scenery: false,
             mud: true,
             surfaces: true,
+            raytracing: false,
             mud_start: 0.0,
             detail: 0.5,
             weather: Weather::Clear,
@@ -262,9 +267,10 @@ impl Enhanced {
                 "smooth" => e.smooth = on,
                 "scenery" | "props" => e.scenery = on,
                 "surfaces" | "materials" => e.surfaces = on,
+                "raytracing" | "rt" => e.raytracing = on,
                 _ => {
                     return Err(format!(
-                        "unknown upgrade {item:?}: try no-msaa, no-lighting, no-shadows, no-distance, no-bloom, no-ao, no-sky, no-grade, no-ground, no-grass, no-clouds, no-ruts, no-dust, no-bikes, no-shafts, no-cinematic, no-mud, no-smooth, no-scenery, no-surfaces, mud=0.5, detail=0.5, msaa=8, quality=low/medium/high/ultra, resolution=1080p, weather=rain or time=dusk"
+                        "unknown upgrade {item:?}: try no-msaa, no-lighting, no-shadows, no-distance, no-bloom, no-ao, no-sky, no-grade, no-ground, no-grass, no-clouds, no-ruts, no-dust, no-bikes, no-shafts, no-cinematic, no-mud, no-smooth, no-scenery, no-surfaces, raytracing, mud=0.5, detail=0.5, msaa=8, quality=low/medium/high/ultra, resolution=1080p, weather=rain or time=dusk"
                     ))
                 }
             }
@@ -292,6 +298,26 @@ pub fn samples(wanted: u32) -> u32 {
         .max()
         .unwrap_or(1)
 }
+/// Whether the GPU was opened able to trace rays (only when the
+/// ray-traced shadows are asked for).
+static RAY_QUERIES: OnceLock<bool> = OnceLock::new();
+
+/// Says whether the GPU can trace rays.
+pub fn set_ray_queries(on: bool) {
+    let _ = RAY_QUERIES.set(on);
+}
+
+/// Whether the ray-traced shadows are asked for, whether or not the GPU
+/// can draw them: then the GPU is opened able to, if it can.
+pub fn wants_ray_tracing() -> bool {
+    enhanced().is_some_and(|e| e.raytracing && e.shadows)
+}
+
+/// Whether the sun's shadows are ray traced: asked for, and the GPU can.
+pub fn ray_traced() -> bool {
+    wants_ray_tracing() && RAY_QUERIES.get() == Some(&true)
+}
+
 /// F3's switch: false shows the original look on the enhanced drawing.
 static SHOWING: AtomicBool = AtomicBool::new(true);
 
@@ -353,7 +379,8 @@ mod tests {
         assert_eq!(some.msaa, 8);
         assert_eq!(Enhanced::parse("no-msaa").unwrap().msaa, 1);
         assert!(Enhanced::parse("msaa=3").is_err());
-        assert!(Enhanced::parse("raytracing").is_err());
+        assert!(Enhanced::parse("pathtracing").is_err());
+        assert!(!all.raytracing && Enhanced::parse("raytracing").unwrap().raytracing);
         let w = Enhanced::parse("weather=rain,time=dusk,no-grass").unwrap();
         assert_eq!(w.weather, Weather::Rain);
         assert_eq!(w.time, Some(18.0));
