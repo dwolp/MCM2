@@ -209,6 +209,9 @@ struct Params {
     /// and whether there is one and where its camera was.
     previous: [[f32; 4]; 4],
     history: [f32; 4],
+    /// x how many floodlights light the shadows in place of the sun (0
+    /// outdoors).
+    lights: [f32; 4],
 }
 
 /// What the scene's shaders read the traced shadows from.
@@ -233,6 +236,10 @@ struct Reflections {
 /// The scene as the rays see it.
 pub struct Scene {
     passes: Passes,
+    /// A domed stadium's floodlights (rt_shadow.wgsl), two vec4s each:
+    /// (middle, spread), (how many lamps, ...); and how many.
+    floodlights: wgpu::Buffer,
+    floodlight_count: u32,
     reflections: Reflections,
     pub tlas: wgpu::Tlas,
     terrain: Built,
@@ -252,7 +259,14 @@ const IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1
 impl Scene {
     /// The scene of `terrain` (`ground` its tiles' textures) and the
     /// objects' `geometry`.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, terrain: &Terrain, ground: &[crate::hires::Image], geometry: &Geometry) -> Scene {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        terrain: &Terrain,
+        ground: &[crate::hires::Image],
+        geometry: &Geometry,
+        floodlights: &[(glam::Vec3, f32, f32)],
+    ) -> Scene {
         eprintln!(
             "ray tracing: {} still triangles ({} cut out), {} moving ({} cut out), {} masks",
             (geometry.still[0].len() + geometry.still[1].len()) / 3,
@@ -465,7 +479,19 @@ impl Scene {
             blank: shadow_texture(device, (1, 1)),
             frame: 0,
         };
+        let mut lamps: Vec<[f32; 8]> = floodlights.iter().map(|(at, spread, n)| [at.x, at.y, at.z, *spread, *n, 0.0, 0.0, 0.0]).collect();
+        let floodlight_count = lamps.len() as u32;
+        if lamps.is_empty() {
+            lamps.push([0.0; 8]);
+        }
+        let floodlights = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("rt floodlights"),
+            contents: bytemuck::cast_slice(&lamps),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         Scene {
+            floodlights,
+            floodlight_count,
             passes,
             reflections,
             tlas,
@@ -530,6 +556,11 @@ impl Scene {
             self.terrain.vertices.as_entire_binding(),
             terrain.as_entire_binding(),
         ]
+    }
+
+    /// Whether a domed stadium's floodlights were found to light it.
+    pub fn has_floodlights(&self) -> bool {
+        self.floodlight_count > 0
     }
 
     /// The traced shadows, for the scene's shaders.
@@ -638,6 +669,10 @@ impl Scene {
                 wgpu::BindGroupEntry {
                     binding: 13,
                     resource: wgpu::BindingResource::TextureView(&motion),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: self.floodlights.as_entire_binding(),
                 },
             ],
         });
@@ -772,6 +807,7 @@ impl Scene {
         mask: u8,
         fovy: f32,
         shafts: bool,
+        indoors: bool,
     ) {
         let p = &mut self.passes;
         let Some(t) = &p.targets else { return };
@@ -787,6 +823,7 @@ impl Scene {
             size: [t.size.0 as f32, t.size.1 as f32, (p.frame % 64) as f32, 2.0 * (fovy / 2.0).tan() / t.size.1 as f32],
             previous: previous.to_cols_array_2d(),
             history,
+            lights: [if indoors { self.floodlight_count as f32 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         p.before = Some((view_proj, camera));
         let w = (p.frame % 2) as usize;

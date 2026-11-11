@@ -331,6 +331,88 @@ impl ObjectMesh {
         g
     }
 
+    /// The stadium's floodlights, where its textures paint them: the
+    /// near-white glowing texels high on the still objects, gathered into
+    /// banks. Each bank's middle (drawing coordinates), how far it spreads
+    /// (ft) and how many lamp texels it holds.
+    pub fn floodlights(&self, above: f32) -> Vec<(Vec3, f32, f32)> {
+        const CELL: f32 = 40.0;
+        // Lamps this near one another are one bank, and the most banks.
+        const BANK: f32 = 160.0;
+        const MOST_BANKS: usize = 16;
+        let mut cells: HashMap<(i32, i32, i32), (Vec3, f32, Vec3, Vec3)> = HashMap::new();
+        for ((range, image), name) in self.draws.iter().zip(&self.names) {
+            // The domed stadium's walls and roof are its texture panels;
+            // nothing else paints lamps.
+            if !name.to_lowercase().starts_with("texturepanel") {
+                continue;
+            }
+            let Some(img) = image else { continue };
+            let Some(top) = img.levels.first() else { continue };
+            let side = img.size as f32;
+            for tri in self.indices[range.start as usize..range.end as usize].chunks_exact(3) {
+                let v = [0, 1, 2].map(|k| &self.vertices[tri[k] as usize]);
+                if v[0].node & NODE != 0 {
+                    continue;
+                }
+                let p = v.map(|v| Vec3::from(v.position));
+                if p.iter().all(|p| p.y < above) {
+                    continue;
+                }
+                let uv = v.map(|v| glam::Vec2::from(v.uv));
+                // Sampled about once a texel.
+                let span = ((uv[1] - uv[0]).length().max((uv[2] - uv[0]).length()) * side).ceil().clamp(1.0, 512.0) as u32;
+                for a in 0..=span {
+                    for b in 0..=(span - a) {
+                        let (wa, wb) = (a as f32 / span as f32, b as f32 / span as f32);
+                        let t = uv[0] * (1.0 - wa - wb) + uv[1] * wa + uv[2] * wb;
+                        let (x, y) = ((t.x.rem_euclid(1.0) * side) as u32, (t.y.rem_euclid(1.0) * side) as u32);
+                        let px = &top[((y.min(img.size - 1) * img.size + x.min(img.size - 1)) * 4) as usize..][..4];
+                        let (r, g, bl) = (px[0] as f32, px[1] as f32, px[2] as f32);
+                        let (hi, lo) = (r.max(g).max(bl), r.min(g).min(bl));
+                        // A lamp: very bright and nearly white.
+                        if hi < 235.0 || lo < 170.0 || hi - lo > 85.0 {
+                            continue;
+                        }
+                        let w = p[0] * (1.0 - wa - wb) + p[1] * wa + p[2] * wb;
+                        if w.y < above {
+                            continue;
+                        }
+                        let key = ((w.x / CELL).floor() as i32, (w.y / CELL).floor() as i32, (w.z / CELL).floor() as i32);
+                        let c = cells.entry(key).or_insert((Vec3::ZERO, 0.0, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)));
+                        c.0 += w;
+                        c.1 += 1.0;
+                        c.2 = c.2.min(w);
+                        c.3 = c.3.max(w);
+                    }
+                }
+            }
+        }
+        // The cells, then near ones gathered into banks, the biggest first.
+        let mut parts: Vec<(Vec3, f32, Vec3, Vec3)> = cells.into_values().filter(|c| c.1 >= 4.0).collect();
+        parts.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut banks: Vec<(Vec3, f32, Vec3, Vec3)> = Vec::new();
+        for (sum, n, lo, hi) in parts {
+            let at = sum / n;
+            match banks.iter_mut().find(|b| (b.0 / b.1).distance(at) < BANK) {
+                Some(b) => {
+                    b.0 += sum;
+                    b.1 += n;
+                    b.2 = b.2.min(lo);
+                    b.3 = b.3.max(hi);
+                }
+                None => banks.push((sum, n, lo, hi)),
+            }
+        }
+        let mut out: Vec<(Vec3, f32, f32)> = banks
+            .iter()
+            .map(|b| (b.0 / b.1, ((b.3 - b.2).length() * 0.5).max(2.0), b.1))
+            .collect();
+        out.sort_by(|a, b| b.2.total_cmp(&a.2));
+        out.truncate(MOST_BANKS);
+        out
+    }
+
     /// Bakes every placement whose model is in `models` and sets up every
     /// animation whose `.mcf` is in `objects`, with textures from the first
     /// of `textures` (named by their archive file) that has them, or their

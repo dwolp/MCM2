@@ -18,6 +18,8 @@ struct Params {
     // one, yzw where its camera was (rt_temporal.wgsl).
     previous: mat4x4<f32>,
     history: vec4<f32>,
+    // x how many floodlights light the shadows in place of the sun.
+    lights: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -40,6 +42,12 @@ struct Params {
 @group(0) @binding(11) var<storage, read> moving_solid: array<u32>;
 @group(0) @binding(12) var<storage, read> moving_cut: array<u32>;
 @group(0) @binding(13) var motion: texture_storage_2d<rgba16float, write>;
+// A domed stadium's floodlights (rt.rs): (middle, spread), (lamps, ...).
+@group(0) @binding(14) var<storage, read> floodlights: array<vec4<f32>>;
+
+// How far the ray now being traced may go: to the sun, or short of the
+// floodlight it goes to (its lamps are on the stadium's own panels).
+var<private> ray_reach: f32 = 6000.0;
 
 // How wide the sun looks, radians: the real one's quarter degree, so
 // shadows soften the farther they fall and a gantry's lattice still shows.
@@ -54,6 +62,10 @@ const CUTOUT_SHOWN: f32 = 250.0;
 // The terrain's instance mask (rt.rs TERRAIN), and how far above a
 // surface its rays toward the hills start, ft.
 const TERRAIN: u32 = 1u;
+// A floodlight bank's lamp, ft across, and how much deeper each bank's
+// shadow goes than its share of the light.
+const BANK_LAMP: f32 = 4.0;
+const FAN_DEPTH: f32 = 2.0;
 const MOVING: u32 = 4u;
 const TERRAIN_LIFT: f32 = 0.5;
 
@@ -74,7 +86,7 @@ fn ray_from(origin: vec3<f32>, dir: vec3<f32>, mask: u32, spread: f32, flags: u3
     // from behind (see `ray`) must not hang on how the moving models'
     // structure happened to be built this frame, or their shadows flicker.
     var rq: ray_query;
-    rayQueryInitialize(&rq, scene, RayDesc(flags, mask, start, RAY_REACH, origin, dir));
+    rayQueryInitialize(&rq, scene, RayDesc(flags, mask, start, ray_reach, origin, dir));
     var through = through_in;
     var first = 0.0;
     while (rayQueryProceed(&rq)) {
@@ -205,6 +217,78 @@ fn on_moving(world: vec3<f32>, to_eye: vec3<f32>, dist: f32, pixel: vec2<i32>) -
     return 1.0;
 }
 
+// How much a bank of `lamps` lamps `d` away counts: by its lamps and the
+// square of how far, and that squared again, so the nearest bright bank
+// casts a clear shadow and the others fainter ones.
+fn bank_weight(lamps: f32, d: vec3<f32>) -> f32 {
+    return lamps / max(dot(d, d), 1.0) * 1e5;
+}
+
+// How much of a domed stadium's floodlight reaches `origin`: one ray to
+// each of the four banks that light it most, at a place across each turned
+// by `turn`, their answers weighed by how strongly each lights it. The same
+// banks every frame, so no choosing among them shimmers. Its x the light,
+// y how far along the rays what shades it is (0 for nothing).
+fn floodlit(origin: vec3<f32>, mask: u32, spread: f32, flags: u32, turn: f32) -> Ray {
+    let count = u32(params.lights.x);
+    // The four strongest, by insertion.
+    var best = array<u32, 4>(0u, 0u, 0u, 0u);
+    var weight = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var j = 0u; j < count; j++) {
+        var w = bank_weight(floodlights[j * 2u + 1u].x, floodlights[j * 2u].xyz - origin);
+        var at = j;
+        for (var k = 0u; k < 4u; k++) {
+            if (w > weight[k]) {
+                let ow = weight[k];
+                let oa = best[k];
+                weight[k] = w;
+                best[k] = at;
+                w = ow;
+                at = oa;
+            }
+        }
+    }
+    var lit = 0.0;
+    var total = 0.0;
+    var shade = 0.0;
+    var shaded = 0.0;
+    for (var k = 0u; k < 4u; k++) {
+        if (weight[k] <= 0.0) {
+            continue;
+        }
+        let l = floodlights[best[k] * 2u];
+        let to = normalize(l.xyz - origin);
+        let side = normalize(cross(to, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(to.y) > 0.99)));
+        let up = cross(side, to);
+        let a = turn + f32(k) * 2.3999632;
+        // As a small bright lamp, not the whole panel the bank is painted
+        // on, so its shadow is a clear one.
+        let aim = l.xyz + (side * cos(a) + up * sin(a)) * BANK_LAMP;
+        let path = aim - origin;
+        // Short of the lamps and what holds them.
+        ray_reach = max(length(path) - 30.0 - l.w, 1.0);
+        let dir = normalize(path);
+        let things = ray(origin, dir, mask & ~TERRAIN, spread, flags);
+        var hills = Ray(1.0, 0.0);
+        if ((mask & TERRAIN) != 0u && things.light > 0.0) {
+            hills = ray(origin + vec3<f32>(0.0, TERRAIN_LIFT, 0.0), dir, TERRAIN, spread, RAY_FLAG_CULL_NO_OPAQUE);
+        }
+        lit += things.light * hills.light * weight[k];
+        total += weight[k];
+        let first = select(hills.shade, things.shade, things.shade > 0.0);
+        if (first > 0.0) {
+            shade += first;
+            shaded += 1.0;
+        }
+    }
+    ray_reach = RAY_REACH;
+    // Each bank's share of the shade made deeper, so that one lamp's
+    // shadow among four shows clearly and two together go dark: an arena's
+    // fan of shadows.
+    let blocked = 1.0 - lit / max(total, 1e-20);
+    return Ray(clamp(1.0 - blocked * FAN_DEPTH, 0.0, 1.0), shade / max(shaded, 1.0));
+}
+
 // Interleaved gradient noise (Jimenez 2014): a different turn for each
 // pixel that the blur after evens out.
 fn noise(p: vec2<f32>) -> f32 {
@@ -246,6 +330,14 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     let side = normalize(cross(to_sun, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(to_sun.y) > 0.99)));
     let up = cross(side, to_sun);
     let turn = noise(vec2<f32>(id.xy) + params.size.z * 5.588238) * 6.2831853;
+    if (params.lights.x > 0.0) {
+        // Each pixel's points across the banks held still from frame to
+        // frame: the banks are wide, their soft edges wider than the blur
+        // evens out, and points that move each frame shimmer.
+        let got = floodlit(origin, mask, spread, flags, noise(vec2<f32>(id.xy)) * 6.2831853);
+        textureStore(traced, vec2<i32>(id.xy), vec4<f32>(got.light, dist, got.shade, on_moving(world, to_eye, dist, vec2<i32>(id.xy))));
+        return;
+    }
     var light = 0.0;
     var shade = 0.0;
     var shaded = 0.0;

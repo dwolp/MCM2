@@ -336,6 +336,16 @@ is lit, in place of the shadow maps.
   move, and at a shadow's edge more rays are traced (as in OpenMM2's
   ray traced shadows).
 
+**Light shafts.** The air glows where the sun reaches it and stays clear
+in the shade of the hills and trees, strongest riding toward a low sun;
+it works whether or not the sun is on screen.
+
+**Stadium floodlights.** In the domed stadium (Seattle, Baltimore, San
+Diego and Chicago) the floodlight banks painted under its roof light the
+floor in place of the stadium's one pretend sun: each bike, rider and
+flagman casts a fan of shadows, one toward each nearby bank, and the
+stands and the gate cast too. The open-air stadiums keep the sun.
+
 **Reflections.** Where something shiny used to show only a painted sky, a
 ray now finds what is really there, lit by the sun where the sun reaches
 it.
@@ -351,8 +361,7 @@ RTX, AMD RX 6000 or newer) and the Vulkan driver; on other cards the
 usual look shows and the game says so in `last-run.log`. It costs some
 frame rate: at 3440×1440 on an RTX 4070, on High, a frame takes about
 11 ms on Morenci Mine and 16 ms in the forest of Iron Mountain (about 90
-and 64 frames a second), where the shadow maps manage 120 to 150. Indoors, as before, only the
-bikes, riders and gates cast shadows.
+and 64 frames a second), where the shadow maps manage 120 to 150. 
 
 ## Playing this fork
 
