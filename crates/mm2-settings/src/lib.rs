@@ -118,7 +118,7 @@ impl Quality {
 
     /// The anti-aliasing this preset draws with ([`ANTIALIASING`]).
     pub fn antialiasing(self) -> &'static str {
-        ["off", "msaa2", "msaa4", "msaa2", "msaa8"][self as usize]
+        ["off", "taa", "msaa4", "msaa2", "msaa8"][self as usize]
     }
 
     /// The most pixels this preset draws the scene with on Auto, as the
@@ -138,7 +138,9 @@ impl Quality {
         };
         // On with this preset though off unless asked.
         let on: &[&str] = match self {
+            Quality::High => &["scenery"],
             Quality::RayTraced => &["raytracing", "scenery", "grade"],
+            Quality::Ultra => &["scenery", "ruts"],
             _ => &[],
         };
         if on.contains(&name) {
@@ -292,7 +294,8 @@ impl Default for Settings {
             time: String::new(),
             weather: "clear".into(),
             detail: 0.5,
-            upgrades: UPGRADES.iter().map(|u| u.2).collect(),
+            // The High preset's, as the quality is.
+            upgrades: UPGRADES.iter().map(|u| Quality::High.has(u.0)).collect(),
             fullscreen: false,
             window: (1024, 768),
             vsync: true,

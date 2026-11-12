@@ -396,7 +396,7 @@ with no more than its pixels), or 50% to 100% of the screen.
 | Preset | Anti-aliasing | Scene resolution on Auto |
 | --- | --- | --- |
 | Low | Off | Up to 1280×720 worth |
-| Medium | MSAA 2× | Up to 1920×1080 worth |
+| Medium | TAA | Up to 1920×1080 worth |
 | High | MSAA 4× | Up to 2560×1440 worth |
 | Ray traced | MSAA 2× | Up to 2560×1440 worth |
 | Ultra | MSAA 8× | The screen's own |

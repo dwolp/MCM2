@@ -88,6 +88,13 @@ fn billboard_facing(foot: vec3<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(to.x, 0.0, to.z) + vec3<f32>(1e-4, 0.0, 0.0));
 }
 
+// The sun on a far tree's billboard: it stands in the middle of the tree
+// the rays see, so they find its own leaves round it; the leaves the
+// billboard stands for are the outer ones, mostly lit.
+fn billboard_sun(sun: f32) -> f32 {
+    return select(sun, mix(sun, 1.0, 0.6), surface.z > 1.5);
+}
+
 // Whether a fragment of a tree, at `world` on screen pixel `pixel`, is
 // left to its other look: the full tree past the band, the billboard
 // short of it, each by a dither through it.
@@ -353,7 +360,10 @@ fn noise3(p: vec3<f32>) -> f32 {
 fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, tex_sampler, in.uv) * in.color;
     // Alpha to coverage: a sharp edge, but smoothed over a pixel.
-    let edge = (texel.a - 0.5) / max(fwidth(texel.a), 1e-4) + 0.5;
+    // A far tree's picture is denser than the tree's own leaves seen as
+    // far: its leaves a little thinner.
+    let cut = select(0.5, 0.62, surface.z > 1.5);
+    let edge = (texel.a - cut) / max(fwidth(texel.a), 1e-4) + 0.5;
     // A face seen from behind (leaves, flags) is lit on the side the eye
     // sees. Told by the eye's side of it, not by the triangle's turn: the
     // flip of z from the game's coordinates turns every triangle round.
@@ -403,7 +413,7 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         if (in.mode == PLANT) {
             l = normalize(vec3<f32>(l.x, 0.0, l.z) + vec3<f32>(1e-6, 0.0, 0.0));
         }
-        let lit = sun_visible(in.world, n, dist, 0.0);
+        let lit = billboard_sun(sun_visible(in.world, n, dist, 0.0));
         let facing = max(dot(bumped, l), 0.0);
         // Ambient a little brighter from the sky above than the ground below.
         let sky = mix(0.95, 1.15, bumped.y * 0.5 + 0.5);
@@ -415,7 +425,7 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         light = pow(soft_clamp(game), vec3<f32>(2.2)) + globals.sun.rgb * glint;
     } else if (in.mode < UNLIT) {
         // The game's own light, only shadowed.
-        let lit = sun_visible(in.world, n, dist, 0.0);
+        let lit = billboard_sun(sun_visible(in.world, n, dist, 0.0));
         let game = min(globals.ambient.rgb + globals.sun.rgb * max(dot(n, globals.to_sun.xyz), 0.0) * lit, vec3<f32>(1.0));
         light = pow(game, vec3<f32>(2.2));
     }

@@ -141,13 +141,19 @@ fn preset(e: &mut Enhanced, name: &str) -> Result<(), String> {
             e.grass = false;
             e.pixels = Some(1280 * 720);
         }
+        // Temporal anti-aliasing in place of MSAA: about as cheap as 2x, and
+        // it rebuilds the 1080p-worth scene at the screen's own sharpness.
         "medium" => {
-            e.msaa = 2;
+            e.msaa = 1;
+            e.taa = true;
             e.shafts = false;
             e.smooth = false;
             e.pixels = Some(1920 * 1080);
         }
-        "high" => {}
+        // The trackside props and crowd too (a tenth of a millisecond).
+        "high" => {
+            e.scenery = true;
+        }
         // High's look with ray tracing, at 2x anti-aliasing for the frame
         // rate the rays take; without the smooth hills (near 2 ms in a
         // forest), with the trackside props and crowd and the colour grade.
@@ -158,9 +164,13 @@ fn preset(e: &mut Enhanced, name: &str) -> Result<(), String> {
             e.scenery = true;
             e.grade = true;
         }
+        // Everything but ray tracing (its own preset, for the cards that
+        // can) and the colour grade (a matter of taste).
         "ultra" => {
             e.msaa = 8;
             e.pixels = None;
+            e.scenery = true;
+            e.ruts = true;
         }
         _ => return Err(format!("quality must be low, medium, high, raytraced or ultra, not {name}")),
     }
@@ -404,6 +414,11 @@ mod tests {
         let rt = Enhanced::parse("quality=raytraced").unwrap();
         assert_eq!((rt.msaa, rt.raytracing, rt.scene_size((3840, 2160))), (2, true, (2560, 1440)));
         assert!(rt.grass && !rt.smooth && rt.scenery && rt.grade);
+        let medium = Enhanced::parse("quality=medium").unwrap();
+        assert!(medium.taa && medium.msaa == 1);
+        let ultra = Enhanced::parse("quality=ultra").unwrap();
+        assert!(ultra.scenery && ultra.ruts && !ultra.grade && !ultra.raytracing);
+        assert!(Enhanced::parse("quality=high").unwrap().scenery);
         // A preset's anti-aliasing and resolution, then changed after it.
         let mixed = Enhanced::parse("quality=ultra,msaa=4,resolution=1440p").unwrap();
         assert_eq!((mixed.msaa, mixed.scene_size((3840, 2160))), (4, (2560, 1440)));

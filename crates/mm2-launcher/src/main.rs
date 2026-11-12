@@ -1084,11 +1084,12 @@ fn size_text((w, h): (u32, u32)) -> String {
 fn preset_text(q: Quality) -> String {
     let effects = match q {
         Quality::Low => "without ambient occlusion, light shafts, smooth hills, replay blur or 3D grass",
-        Quality::Medium => "without light shafts or smooth hills",
+        Quality::Medium => "without light shafts or smooth hills, with TAA rebuilding the scene at the screen's sharpness",
         Quality::RayTraced => {
             "High's effects with ray tracing (needs a graphics card that can trace rays), the trackside props and crowd and the colour grade, without smooth hills"
         }
-        _ => "every effect that's on unless changed",
+        Quality::High => "every effect that's on unless changed, and the trackside props and crowd",
+        _ => "every effect but ray tracing and the colour grade, with lasting ruts and the trackside props and crowd",
     };
     let msaa = ANTIALIASING.iter().find(|a| a.0 == q.antialiasing()).map_or("", |a| a.1);
     format!("{}: {effects}; anti-aliasing {msaa}; scene resolution {}.", q.label(), q.most_pixels())
