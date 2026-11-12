@@ -23,16 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const TIMES: [(&str, &str); 7] = [
-    ("", "Track's own"),
-    ("dawn", "Dawn"),
-    ("morning", "Morning"),
-    ("noon", "Noon"),
-    ("afternoon", "Afternoon"),
-    ("dusk", "Dusk"),
-    ("night", "Night (headlights with ray tracing)"),
-];
-const WEATHERS: [(&str, &str); 3] = [("clear", "Clear"), ("overcast", "Overcast"), ("rain", "Rain")];
 /// The window icon and the logo at the top (drawn from `assets/icon/*.svg`).
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/icon/icon-256.png");
 const LOGO_PNG: &[u8] = include_bytes!("../../../assets/icon/logo-dark.png");
@@ -372,7 +362,8 @@ impl Launcher {
                         self.note = Some((format!("The game stopped with an error: {last}\n(full log: {})", log.display()), true));
                     }
                     self.running = None;
-                    // The game's Tweaks box may have changed them.
+                    // The game's Tweaks box, or its event page's time and
+                    // weather, may have changed them.
                     let game = Settings::load();
                     if game != self.saved {
                         self.settings = game.clone();
@@ -565,12 +556,6 @@ impl Launcher {
                     parts.push(if a.0 == "taa" { "TAA".into() } else { a.1.to_string() });
                 }
                 parts.push(if s.resolution == "auto" { "Auto resolution".into() } else { format!("{} resolution", s.resolution) });
-                parts.push(match TIMES.iter().find(|t| t.0 == s.time) {
-                    Some(t) if t.0 == "night" => "Night".into(),
-                    Some(t) if !t.0.is_empty() => t.1.into(),
-                    _ => "Track's own time".into(),
-                });
-                parts.push(WEATHERS.iter().find(|w| w.0 == s.weather).map_or("Clear", |w| w.1).into());
             } else {
                 parts.push("The original look, as the game drew it".into());
             }
@@ -598,7 +583,7 @@ impl Launcher {
             };
             ui.label(now);
             ui.add(egui::Label::new(look::weak(
-                "Change it in the game: Options, Graphics, Display Resolution. Alt+Enter switches to full screen and back while playing. VSync, the frame rate, the difficulty table, air steering and braking, quick get-up, vibration, the camera and the HUD are in the game too: Options, then Tweaks... at the bottom.",
+                "Change it in the game: Options, Graphics, Display Resolution. Alt+Enter switches to full screen and back while playing. VSync, the frame rate, the difficulty table, air steering and braking, quick get-up, vibration, the camera and the HUD are in the game too: Options, then Tweaks... at the bottom. The time of day and the weather are on the Event page before each race.",
             )).wrap());
         });
     }
@@ -698,42 +683,6 @@ impl Launcher {
                 let mut detail = (s.detail * 100.0).round() as u32;
                 if ui.add(egui::Slider::new(&mut detail, 0..=100).suffix("%").trailing_fill(true)).labelled_by(named).changed() {
                     s.detail = detail as f32 / 100.0;
-                }
-            });
-            look::card(ui, icon::ICON_SCHEDULE, "Time and weather", |ui| {
-                look::label(ui, "Time of day", "");
-                let icons = [
-                    icon::ICON_LANDSCAPE,
-                    icon::ICON_WB_TWILIGHT,
-                    icon::ICON_LIGHT_MODE,
-                    icon::ICON_SUNNY,
-                    icon::ICON_WB_SUNNY,
-                    icon::ICON_FLARE,
-                    icon::ICON_NIGHTS_STAY,
-                ];
-                let choices: Vec<_> = TIMES
-                    .iter()
-                    .zip(icons)
-                    .map(|(t, i)| {
-                        let hover = match t.0 {
-                            "" => "The sky and sun the track was made with.",
-                            "night" => "The bikes' headlights and the Nationals' light poles light the way (with ray tracing; without it, a brighter moon).",
-                            _ => "",
-                        };
-                        Choice::new(t.0, if t.0 == "night" { "Night" } else { t.1 }).icon(i).hover(hover)
-                    })
-                    .collect();
-                let current = TIMES.iter().find(|t| t.0 == s.time).map_or("", |t| t.0);
-                if let Some(t) = look::segmented(ui, current, &choices) {
-                    s.time = t.into();
-                }
-                ui.add_space(4.0);
-                look::label(ui, "Weather", "");
-                let icons = [icon::ICON_SUNNY, icon::ICON_CLOUDY, icon::ICON_RAINY];
-                let choices: Vec<_> = WEATHERS.iter().zip(icons).map(|(w, i)| Choice::new(w.0, w.1).icon(i)).collect();
-                let current = WEATHERS.iter().find(|w| w.0 == s.weather).map_or("clear", |w| w.0);
-                if let Some(w) = look::segmented(ui, current, &choices) {
-                    s.weather = w.into();
                 }
             });
             look::card(ui, icon::ICON_AUTO_FIX_HIGH, "Effects", |ui| {
@@ -1085,11 +1034,9 @@ fn preset_text(q: Quality) -> String {
     let effects = match q {
         Quality::Low => "without ambient occlusion, light shafts, smooth hills, replay blur or 3D grass",
         Quality::Medium => "without light shafts or smooth hills, with TAA rebuilding the scene at the screen's sharpness",
-        Quality::RayTraced => {
-            "High's effects with ray tracing (needs a graphics card that can trace rays), the trackside props and crowd and the colour grade, without smooth hills"
-        }
-        Quality::High => "every effect that's on unless changed, and the trackside props and crowd",
-        _ => "every effect but ray tracing and the colour grade, with lasting ruts and the trackside props and crowd",
+        Quality::RayTraced => "High's effects with ray tracing (needs a graphics card that can trace rays)",
+        Quality::High => "every effect that's on unless changed",
+        _ => "every effect but ray tracing, with lasting ruts",
     };
     let msaa = ANTIALIASING.iter().find(|a| a.0 == q.antialiasing()).map_or("", |a| a.1);
     format!("{}: {effects}; anti-aliasing {msaa}; scene resolution {}.", q.label(), q.most_pixels())

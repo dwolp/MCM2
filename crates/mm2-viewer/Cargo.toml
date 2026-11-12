@@ -20,6 +20,10 @@ pollster = "1.0.1"
 wgpu = "30.0.1"
 winit = "0.30"
 
+[dev-dependencies]
+# The shader test (src/shader_tests.rs): the compiler the GPU code uses.
+naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out", "hlsl-out"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 

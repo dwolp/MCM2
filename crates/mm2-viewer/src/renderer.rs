@@ -184,6 +184,9 @@ pub struct TerrainRenderer {
     headlights: Vec<(Vec3, Vec3)>,
     /// The track's light poles' lamp heads (drawing coordinates).
     pole_lamps: Vec<(Vec3, Vec3)>,
+    /// Their light over the ground at night, baked the first night frame
+    /// (crate::flood).
+    flood: Option<crate::flood::FloodMap>,
     /// Each part of the frame timed on the GPU, when asked (gpu_time).
     gpu_timer: Option<crate::gpu_time::GpuTimer>,
 }
@@ -403,6 +406,7 @@ impl TerrainRenderer {
             cache: None,
         });
         let objects_pole_lamps = objects.pole_lamps.clone();
+        let flood = upgrades.and_then(|_| crate::flood::FloodMap::new(device, terrain, &objects_pole_lamps));
         let mut rt = (upgrades.is_some() && crate::graphics::ray_traced()).then(|| {
             let geometry = objects.rt_geometry(device.limits().max_texture_array_layers);
             // The domed stadium's floodlights, high under its roof.
@@ -630,6 +634,7 @@ impl TerrainRenderer {
             size: (0, 0),
             enhanced,
             headlights: Vec::new(),
+            flood,
             pole_lamps: objects_pole_lamps,
         }
     }
@@ -1018,6 +1023,26 @@ impl TerrainRenderer {
             .filter(|_| showing.is_some_and(|e| e.dust))
             .and_then(|e| e.dust.as_ref()?.bounds(camera.position))
             .map(|(low, high)| crate::dust::sun_view(low, high, lights.to_sun));
+        // The light poles' light baked the first night frame: traced
+        // through the ray-traced scene, else over the hills alone.
+        if let (Some(flood), Some(e)) = (self.flood.as_mut().filter(|f| !f.baked() && day.as_ref().is_some_and(|d| d.night > 0.0)), self.enhanced.as_mut()) {
+            match e.rt.as_mut() {
+                Some(rt) => {
+                    // The still parts built first, if this is the first frame.
+                    if !rt.ready() {
+                        let mut build = device.create_command_encoder(&Default::default());
+                        rt.update(&mut build, None);
+                        queue.submit([build.finish()]);
+                    }
+                    rt.bake_flood(device, queue, flood);
+                    e.shared.set_flood(device, flood.map(), Some(rt));
+                }
+                None => {
+                    flood.bake_hills(device, queue);
+                    e.shared.set_flood(device, flood.map(), None);
+                }
+            }
+        }
         if let (Some(e), Some(on)) = (&self.enhanced, showing) {
             let flag = |b: bool| b as u32 as f32;
             let (h_start, density, _) = haze.unwrap_or((0.0, 0.0, far));
@@ -1072,6 +1097,7 @@ impl TerrainRenderer {
                 },
                 dust_view: dust_view.map_or(Mat4::IDENTITY, |(m, _)| m).to_cols_array_2d(),
                 dust: dust_view.map_or([0.0; 4], |(_, least)| [1.0, least, 0.0, 0.0]),
+                flood: self.flood.as_ref().map_or([0.0; 4], |f| f.area()),
             };
             queue.write_buffer(&e.shared.buffer, 0, bytemuck::bytes_of(&enh));
         }

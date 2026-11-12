@@ -1718,6 +1718,7 @@ dependencies = [
  "mm2-indeo",
  "mm2-physics",
  "mm2-settings",
+ "naga",
  "png",
  "pollster 1.0.1",
  "wgpu",

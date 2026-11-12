@@ -351,7 +351,9 @@ floor in place of the stadium's one pretend sun: each bike, rider and
 flagman casts a fan of shadows, one toward each nearby bank, and the
 stands and the gate cast too. The open-air stadiums keep the sun.
 
-**Night races.** Time of day has **Night**: the sun down, a faint blue
+**Night races.** The time of day and the weather are picked in the game,
+on the Event page before each race (they used to be in the launcher).
+Time of day has **Night**: the sun down, a faint blue
 moon casting soft shadows, and the track dark but for the bikes'
 headlights. Each bike's headlight is a spotlight traced like the sun, so
 the riders ahead cast long shadows down the beams, the lamps glow, and a
@@ -359,8 +361,12 @@ rider coming up behind lights you up. On the Nationals the track's light
 poles come on too, each lamp head glowing and lighting a pool of track
 below it, shadows and all. The sponsors' boards along the Nationals and
 the finish banner are lit from behind, their colours glowing in the
-dark. Without ray tracing there are no headlights or pole lights and the
-moon is brighter, so the track still shows (the boards glow either way).
+dark. The poles' light is worked out once as the race loads, every pole
+and all that never moves, so each frame only the riders' shadows in it
+are traced. Without ray tracing the poles still light their pools of
+track, the hills shading them, but there are no headlights and the moon
+is brighter, so the rest of the track still shows (the boards glow
+either way).
 
 **Reflections.** Where something shiny used to show only a painted sky, a
 ray now finds what is really there, lit by the sun where the sun reaches
@@ -401,13 +407,14 @@ with no more than its pixels), or 50% to 100% of the screen.
 | Ray traced | MSAA 2× | Up to 2560×1440 worth |
 | Ultra | MSAA 8× | The screen's own |
 
-**Ray traced** is High's effects with ray tracing on, the trackside props
-and crowd and the colour grade, and without smooth hills, at 2×
+**Ray traced** is High's effects with ray tracing on, at 2×
 anti-aliasing: sharp, and winning back some of the frame rate the rays
-take (smooth hills alone cost nearly 2 ms a frame in a forest). At
-3440×1440 on an RTX 4070 a frame takes about 11.5 ms in Iron Mountain's
-forest and 10 to 11 ms on Morenci Mine (85 to 95 frames a second). It needs a graphics card that can trace
-rays; on others it looks the same but with the usual shadows.
+take. It needs a graphics card that can trace rays; on others it looks
+the same but with the usual shadows. **Ultra** is every effect but ray
+tracing, with lasting ruts. The trackside props and crowd and the colour
+grade are in no preset, a matter of taste: turn them on under Effects.
+Smooth hills cost the most of the rest, nearly 2 ms a frame in a forest
+with ray tracing; turn them off there to win it back.
 
 ### Temporal anti-aliasing
 
