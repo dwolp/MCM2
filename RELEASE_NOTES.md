@@ -1,16 +1,16 @@
-# OpenMCM2 1.1.0 (Daniel's fork)
+# OpenMCM2 1.2.0 (Daniel's fork)
 
 A big graphics update on top of
 [1.0.4](https://github.com/dwolp/MCM2/releases/tag/v1.0.4): ray tracing,
-night races, steadier pictures, faster forests and a new launcher.
-You need your own copy of Motocross Madness 2; see the
+night races with floodlit Nationals, steadier pictures, faster forests and
+a new launcher. You need your own copy of Motocross Madness 2; see the
 [README](https://github.com/dwolp/MCM2#readme) for what this fork changes.
 
 Download the archive for your computer below, unpack it and start the
 launcher (`mm2-launcher`). An earlier 1.0 launcher offers this update
 itself.
 
-## New in 1.1.0
+## New in 1.2.0
 
 * **A new launcher**: pages for Play, Graphics, Tracks and Updates in a
   sidebar, with the PLAY button always at hand. Buttons, sliders and
@@ -24,10 +24,17 @@ itself.
   * Beams of sunlight through the trees and past the riders.
   * Wet ground, puddles and bike paint reflecting what is round them.
   * In the domed stadium, a fan of shadows from its floodlights.
-* **Night races**: Time of day has **Night**. With ray tracing, each
-  bike's headlight lights the track ahead and casts long shadows, the
-  Nationals' light poles light pools of track, and the sponsors' boards
-  glow. Without ray tracing the moon is brighter, so you can still see.
+* **Night races**: pick **Night** as the time of day.
+  * On the Nationals the light poles light pools of track, with or
+    without ray tracing. Their light is worked out once as the race
+    loads, with the soft shadows of everything that never moves; without
+    ray tracing the hills shade it.
+  * With ray tracing, each bike's headlight lights the track ahead and
+    casts long shadows, and the riders cast shadows in the floodlights.
+  * The sponsors' boards along the Nationals glow, lit from behind.
+* **Time of day and weather in the game**: pick them on the Event page
+  before each race, under Difficulty. Your choice is kept for the next
+  race and the next start.
 * **Dust clouds that cast shadows**, softer and without square blotches.
 * **Steadier pictures**: anti-aliasing is now one choice: Off, MSAA 2×,
   4× or 8×, or the new **TAA**. TAA blends each frame with the ones
@@ -37,8 +44,9 @@ itself.
 * **Every graphics setting shown**: the anti-aliasing and the scene
   resolution (Auto or 50–100% of the screen) are settings of their own.
   A preset sets them and the effects; change any and it shows as
-  **Custom**. Medium now uses TAA, High adds the trackside props and
-  crowd, and Ultra has everything but ray tracing and the colour grade.
+  **Custom**. Medium uses TAA; Ultra has every effect but ray tracing,
+  with lasting ruts. The trackside props and crowd and the colour grade
+  are in no preset, as a matter of taste: turn them on under Effects.
 * **Faster forests**: far off, trees are drawn as the game's own flat
   pictures of them, as the original game did. The forest tracks run
   noticeably faster, with or without ray tracing.
@@ -49,6 +57,6 @@ itself.
   logos on boards and banners no longer flicker in and out at a distance.
 * **Billboards no longer shimmer** along the tracks.
 
-On an RTX 4070 at 3440×1440, the Ray traced preset runs at about
-95 frames a second in Iron Mountain's forest and 105 on Morenci Mine;
-High without ray tracing at about 155.
+On an RTX 4070 at 3440×1440 by day, the Ray traced preset runs at about
+90 frames a second in Iron Mountain's forest and 115 on Morenci Mine;
+High without ray tracing at about 160 and 180.

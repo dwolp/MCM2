@@ -169,6 +169,10 @@ struct Targets {
     /// The rays' light, blurred.
     soft: wgpu::TextureView,
     trace_groups: [wgpu::BindGroup; 2],
+    /// Each 2 x 2 block's first pixel traced ahead (rt_shadow.wgsl
+    /// `probe`), at half size.
+    probe_groups: [wgpu::BindGroup; 2],
+    probe_size: (u32, u32),
     /// Blending in the frames before, and blurring what that gives: one of
     /// each for either of the two histories being the one written.
     blend_groups: [wgpu::BindGroup; 2],
@@ -186,6 +190,9 @@ struct Targets {
 struct Passes {
     params: wgpu::Buffer,
     trace: wgpu::ComputePipeline,
+    probe: wgpu::ComputePipeline,
+    /// The light poles' light over the ground, baked once (crate::flood).
+    bake: wgpu::ComputePipeline,
     blend: wgpu::ComputePipeline,
     blur: wgpu::ComputePipeline,
     shafts: wgpu::ComputePipeline,
@@ -219,6 +226,28 @@ struct Params {
 /// How steeply a light pole's lamps point down, against how far toward
 /// the track it faces (1 to 1 is 45 degrees).
 const POLE_DOWN: f32 = 1.2;
+
+/// The way a light pole placed facing `facing` shines: down onto the
+/// track, which lies behind the way it faces.
+pub fn pole_way(facing: glam::Vec3) -> glam::Vec3 {
+    (glam::Vec3::NEG_Y * POLE_DOWN - facing).normalize()
+}
+
+/// The shadows' shader: rt_shadow.wgsl with the lamps' beams
+/// (lamp_light.wgsl) and the poles' baked light (flood.wgsl, traced by
+/// flood_rt.wgsl).
+pub fn shadow_source() -> String {
+    let shadow = include_str!("rt_shadow.wgsl").replacen("enable wgpu_ray_query;", &format!("enable wgpu_ray_query;\n{}", include_str!("lamp_light.wgsl")), 1);
+    format!("{shadow}\n{}\n{}", include_str!("flood.wgsl"), include_str!("flood_rt.wgsl"))
+}
+
+/// The poles' baked light as the trace reads it (crate::flood): blanks
+/// till it is baked.
+struct FloodBinds {
+    heights: wgpu::Buffer,
+    uniform: wgpu::Buffer,
+    map: wgpu::TextureView,
+}
 
 /// The most headlights traced.
 const MOST_HEADLIGHTS: usize = 80;
@@ -263,6 +292,7 @@ pub struct Scene {
     pub sampler: wgpu::Sampler,
     /// Whether the still parts are built.
     built: bool,
+    flood: FloodBinds,
 }
 
 /// The instance transform that leaves things where they are.
@@ -474,6 +504,7 @@ impl Scene {
             })
         };
         let volume = module("rt shafts", include_str!("rt_volume.wgsl"));
+        let shadow = module("rt trace", &shadow_source());
         let passes = Passes {
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rt shadows"),
@@ -481,7 +512,9 @@ impl Scene {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            trace: compute("rt trace", &module("rt trace", include_str!("rt_shadow.wgsl")), "trace"),
+            trace: compute("rt trace", &shadow, "trace"),
+            probe: compute("rt probe", &shadow, "probe"),
+            bake: compute("flood bake", &shadow, "bake"),
             blend: compute("rt blend", &module("rt blend", include_str!("rt_temporal.wgsl")), "blend"),
             blur: compute("rt blur", &module("rt blur", include_str!("rt_blur.wgsl")), "blur"),
             shafts: compute("rt shafts", &volume, "scatter"),
@@ -521,7 +554,57 @@ impl Scene {
             masks,
             sampler,
             built: false,
+            flood: FloodBinds {
+                heights: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("rt no flood"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }),
+                uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("rt no flood"),
+                    size: 48,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                    mapped_at_creation: false,
+                }),
+                map: shadow_texture(device, (1, 1)),
+            },
         }
+    }
+
+    /// Whether the still parts are built, so rays can be traced through
+    /// them outside the frame (the floodlights' bake).
+    pub fn ready(&self) -> bool {
+        self.built
+    }
+
+    /// Bakes the light poles' light over the ground (crate::flood), traced
+    /// through all that does not move, and reads it from now on.
+    pub fn bake_flood(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, flood: &mut crate::flood::FloodMap) {
+        let p = &self.passes;
+        let mut entries = vec![
+            entry(2, wgpu::BindingResource::AccelerationStructure(&self.tlas)),
+            entry(3, self.cutouts.as_entire_binding()),
+            entry(4, wgpu::BindingResource::TextureView(&self.masks)),
+            entry(5, wgpu::BindingResource::Sampler(&self.sampler)),
+            entry(7, self.reflections.hits.as_entire_binding()),
+            entry(8, self.reflections.vertices.as_entire_binding()),
+            entry(9, self.reflections.nodes.as_entire_binding()),
+        ];
+        entries.extend(flood.entries());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flood bake"),
+            layout: &p.bake.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        flood.run(device, queue, &p.bake, &group);
+        self.flood = FloodBinds {
+            heights: flood.heights().clone(),
+            uniform: flood.uniform().clone(),
+            map: flood.map().clone(),
+        };
+        // The trace's groups made again with it.
+        self.passes.targets = None;
     }
 
     /// Poses the moving models from the objects' `vertices` (made with
@@ -632,6 +715,47 @@ impl Scene {
         };
         let p = &self.passes;
         let histories = [shadow_texture(device, size), shadow_texture(device, size)];
+        let probe_size = (size.0.div_ceil(2), size.1.div_ceil(2));
+        let probes = shadow_texture(device, probe_size);
+        let probe_lamps = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("rt probe lamps"),
+                size: wgpu::Extent3d {
+                    width: probe_size.0,
+                    height: probe_size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Uint,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        // With the frame before's settled shadows, as the trace's.
+        let probe_groups = [0usize, 1].map(|w| device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rt probe"),
+            layout: &p.probe.get_bind_group_layout(0),
+            entries: &[
+                entry(0, p.params.as_entire_binding()),
+                entry(1, wgpu::BindingResource::TextureView(&depth)),
+                entry(2, wgpu::BindingResource::AccelerationStructure(&self.tlas)),
+                entry(3, self.cutouts.as_entire_binding()),
+                entry(4, wgpu::BindingResource::TextureView(&self.masks)),
+                entry(5, wgpu::BindingResource::Sampler(&self.sampler)),
+                entry(7, self.reflections.hits.as_entire_binding()),
+                entry(8, self.reflections.vertices.as_entire_binding()),
+                entry(9, self.reflections.nodes.as_entire_binding()),
+                entry(15, self.headlights.as_entire_binding()),
+                entry(17, wgpu::BindingResource::TextureView(&histories[1 - w])),
+                entry(18, wgpu::BindingResource::TextureView(&probes)),
+                entry(20, wgpu::BindingResource::TextureView(&probe_lamps)),
+                entry(30, self.flood.heights.as_entire_binding()),
+                entry(31, self.flood.uniform.as_entire_binding()),
+                entry(34, wgpu::BindingResource::TextureView(&self.flood.map)),
+            ],
+        }));
         // Tracing the frame that writes history `w`, with the other (the
         // frame before's settled shadows) to tell how many rays a pixel
         // needs.
@@ -711,6 +835,11 @@ impl Scene {
                     binding: 17,
                     resource: wgpu::BindingResource::TextureView(&histories[1 - w]),
                 },
+                entry(19, wgpu::BindingResource::TextureView(&probes)),
+                entry(21, wgpu::BindingResource::TextureView(&probe_lamps)),
+                entry(30, self.flood.heights.as_entire_binding()),
+                entry(31, self.flood.uniform.as_entire_binding()),
+                entry(34, wgpu::BindingResource::TextureView(&self.flood.map)),
             ],
         }));
         // Writing history `w`, reading the other; for the shadows and the
@@ -811,6 +940,8 @@ impl Scene {
             depth,
             soft,
             trace_groups,
+            probe_groups,
+            probe_size,
             blend_groups,
             blur_groups,
         });
@@ -857,7 +988,7 @@ impl Scene {
             .chain(poles.iter().map(|(at, facing)| {
                 // Down onto the track, which lies behind the way the pole
                 // was placed facing.
-                let way = (glam::Vec3::NEG_Y * POLE_DOWN - *facing).normalize();
+                let way = pole_way(*facing);
                 [at.x, at.y, at.z, 1.0, way.x, way.y, way.z, 0.0]
             }))
             .take(MOST_HEADLIGHTS)
@@ -897,6 +1028,7 @@ impl Scene {
                 timer.mark(encoder, label);
             }
         };
+        step(encoder, &p.probe, &t.probe_groups[w], (t.probe_size.0.div_ceil(8), t.probe_size.1.div_ceil(8)), "rt: shadow probes");
         step(encoder, &p.trace, &t.trace_groups[w], groups, "rt: shadow rays");
         if shafts {
             let half = (t.shaft_size.0.div_ceil(8), t.shaft_size.1.div_ceil(8));

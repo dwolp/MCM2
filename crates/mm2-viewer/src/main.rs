@@ -48,6 +48,9 @@ mod bars;
 mod eco;
 mod enhance;
 mod rt;
+mod flood;
+#[cfg(test)]
+mod shader_tests;
 mod gpu_time;
 mod grass;
 mod ruts;

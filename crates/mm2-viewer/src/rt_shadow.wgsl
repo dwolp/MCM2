@@ -52,26 +52,25 @@ struct Params {
 // The frame before's shadows as rt_temporal.wgsl settled them: x the
 // light, w how many frames it has gathered there.
 @group(0) @binding(17) var settled: texture_2d<f32>;
+// Each 2 x 2 block's first pixel traced ahead of the rest (`probe`): x
+// its sun's light (-1 where the floodlights light it), y how far it is
+// from the camera, z how far off what shades it is, w 1 where it is the
+// ground under the poles' baked light (0 off it, 0.5 the sky). Written by
+// the probe pass, read by the trace.
+// And which lamps (the first 64) it traced and saw (xy), and which it
+// traced and found something in the way of (zw).
+@group(0) @binding(18) var probe_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(19) var probes: texture_2d<f32>;
+@group(0) @binding(20) var probe_lamps_out: texture_storage_2d<rgba32uint, write>;
+@group(0) @binding(21) var probe_lamps: texture_2d<u32>;
 // A pixel's shadow has settled with this many frames gathered.
 const SETTLED: f32 = 3.0;
 
-// A headlight's colour and strength (a ft away), how wide its beam is
-// (the cosines of where it is full and where it ends), and how far it
-// reaches, ft.
-const LAMP: vec3<f32> = vec3<f32>(1.0, 0.92, 0.78) * 800.0;
-// Close to the lamp its light grows no more than this.
-const LAMP_MOST: f32 = 2.5;
-const BEAM_FULL: f32 = 0.95;
-const BEAM_EDGE: f32 = 0.62;
-const LAMP_REACH: f32 = 350.0;
-// A light pole: its colour and strength (a ft away), its wide downward
-// beam (the cosines of full and edge) and how far it reaches, ft.
-const POLE: vec3<f32> = vec3<f32>(0.95, 0.97, 1.0) * 2600.0;
-const POLE_FULL: f32 = 0.95;
-const POLE_EDGE: f32 = 0.2;
-const POLE_REACH: f32 = 260.0;
-// A lamp lighting a place less than this is left untraced there.
-const LAMP_FAINT: f32 = 0.015;
+// The lamps' beams (LAMP, POLE, `lamp_beam`) are in lamp_light.wgsl,
+// shared with the poles' baked light (flood.wgsl).
+// The poles' light over the ground, baked (flood.wgsl, whose bindings and
+// `ground_height` this shares).
+@group(0) @binding(34) var flood_map: texture_2d<f32>;
 // How far short of a headlight its shadow rays stop, ft: past the lamp's
 // own bike (its number plate stands in front of it).
 const OWN_BIKE: f32 = 4.5;
@@ -314,93 +313,179 @@ fn surface_normal(p: vec2<i32>, world: vec3<f32>) -> vec3<f32> {
 // The bikes' headlights' light reaching `world` (pixel `p`, `dist` ft
 // from the camera): each spot's beam, falling off with the square of how
 // far, as squarely as it meets the surface, where nothing stands between.
-fn headlit(world: vec3<f32>, p: vec2<i32>, dist: f32) -> vec3<f32> {
+// A lamp the blocks round it all saw (`seen`) is taken as reaching it, one
+// they all found blocked as blocked; only the rest are traced.
+// `kind` says what the blocks round it were: 0 all off the ground, 1 all
+// ground, 2 some of each.
+fn headlit(world: vec3<f32>, p: vec2<i32>, dist: f32, seen_by: vec2<u32>, shut_by: vec2<u32>, kind: u32) -> Lit {
+    var out = Lit(vec3<f32>(0.0), vec2<u32>(0u), vec2<u32>(0u), false);
     let count = u32(params.lights.y);
     if (count == 0u) {
-        return vec3<f32>(0.0);
+        return out;
     }
     let n = surface_normal(p, world);
-    // Each lamp's light here, were nothing in the way; the four strongest
-    // kept (by insertion), the faint ones left out: only those are traced.
     let off = 0.04 + dist * 0.0006;
-    var bikes = vec3<f32>(0.0);
+    // On the ground the poles' light is baked, shadows and all; only the
+    // riders' shadows in it are traced here.
+    let baked = baked_ground(world, n, dist);
+    let on_ground = baked.w > 0.5;
+    out.ground = on_ground;
+    // The blocks' answers only from blocks of the same kind: on the ground
+    // they looked only for riders, elsewhere for everything.
+    let alike = select(kind == 0u, kind == 1u, on_ground);
+    let seen = select(vec2<u32>(0u), seen_by, alike);
+    let shut = select(vec2<u32>(0u), shut_by, alike);
+    var unhidden = vec3<f32>(0.0);
+    var hidden = vec3<f32>(0.0);
+    // The four strongest poles, kept by insertion; the faint left out.
     var best = array<u32, 4>(0u, 0u, 0u, 0u);
-    var light = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     var strength = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
-    for (var j = 0u; j < count; j++) {
-        let at = headlights[j * 2u].xyz;
-        let pole = headlights[j * 2u].w > 0.5;
-        let way = headlights[j * 2u + 1u].xyz;
-        let to = at - world;
-        let d = length(to);
-        let reach = select(LAMP_REACH, POLE_REACH, pole);
-        // Not a headlight's own bike, just behind the lamp.
-        if (d > reach || d < 2.0) {
+    // Only the lamps that reach this pixel's tile (`cull_lamps`).
+    let listed = atomicLoad(&tile_count);
+    for (var t = 0u; t < listed; t++) {
+        let j = tile_lamps[t];
+        if (headlights[j * 2u].w < 0.5) {
             continue;
         }
-        let l = to / d;
-        // A pole's pool fades out slowly to its edge, brightest under it.
-        let into = select(smoothstep(BEAM_EDGE, BEAM_FULL, dot(-l, way)), pow(smoothstep(POLE_EDGE, POLE_FULL, dot(-l, way)), 1.5), pole);
-        let facing = dot(n, l);
-        if (into <= 0.0 || facing <= 0.0) {
-            continue;
-        }
-        let fade = 1.0 - smoothstep(reach * 0.7, reach, d);
-        // A headlight's beam carries further than the square of how far
-        // would let it, as a focused beam does.
-        let falloff = select(pow(d, 1.5) + 12.0, d * d + 30.0, pole);
-        var c = select(LAMP, POLE, pole) * into * into * facing * fade / falloff;
-        var w = max(c.r, max(c.g, c.b));
-        if (w < LAMP_FAINT) {
-            continue;
-        }
-        // A bike's headlight always: there are few, and they matter most.
-        if (!pole) {
-            if (lamp_clear(world, n, off, at, OWN_BIKE)) {
-                bikes += c;
-            }
-            continue;
-        }
+        var w = lamp_light(j, world, n).w;
         var at_j = j;
         for (var k = 0u; k < 4u; k++) {
             if (w > strength[k]) {
                 let ow = strength[k];
-                let oc = light[k];
                 let oj = best[k];
                 strength[k] = w;
-                light[k] = c;
                 best[k] = at_j;
                 w = ow;
-                c = oc;
                 at_j = oj;
             }
         }
     }
-    var sum = bikes;
-    for (var k = 0u; k < 4u; k++) {
-        if (strength[k] <= 0.0) {
-            break;
+    // Then every bike's headlight (there are few, and they matter most)
+    // and those poles, each traced in this one place: a ray query written
+    // out more than once makes the shader too big to run many at a time.
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < listed + 4u; i++) {
+        var j = 0u;
+        var short = OWN_BIKE;
+        if (i < listed) {
+            j = tile_lamps[i];
+            if (headlights[j * 2u].w > 0.5) {
+                continue;
+            }
+        } else {
+            if (strength[i - listed] <= 0.0) {
+                break;
+            }
+            j = best[i - listed];
+            short = 3.0;
         }
-        if (lamp_clear(world, n, off, headlights[best[k] * 2u].xyz, 3.0)) {
-            sum += light[k];
+        let c = lamp_light(j, world, n);
+        if (c.w <= 0.0) {
+            continue;
+        }
+        // A pole over the ground: its light is baked, only a rider in the
+        // way of it is looked for.
+        let riders_only = on_ground && i >= listed;
+        // As the blocks round it all found, or traced (and noted).
+        let bit = 1u << (j & 31u);
+        let word = min(j >> 5u, 1u);
+        let noted = j < 64u;
+        var clear = noted && (seen[word] & bit) != 0u;
+        if (!clear && !(noted && (shut[word] & bit) != 0u)) {
+            clear = lamp_clear(world, n, off, headlights[j * 2u].xyz, short, riders_only);
+            if (noted) {
+                if (clear) {
+                    out.seen[word] |= bit;
+                } else {
+                    out.shut[word] |= bit;
+                }
+            }
+        }
+        if (riders_only) {
+            unhidden += c.rgb;
+            if (!clear) {
+                hidden += c.rgb;
+            }
+            continue;
+        }
+        if (clear) {
+            sum += c.rgb;
         }
     }
-    return min(sum, vec3<f32>(LAMP_MOST)) * params.lights.z;
+    if (on_ground) {
+        // A rider's shadow takes away that pole's share, as much of it as
+        // the baked light holds (what else hides the pole is in it).
+        let held = clamp(dot(baked.rgb, vec3<f32>(1.0)) / max(dot(unhidden, vec3<f32>(1.0)), 1e-4), 0.0, 1.0);
+        sum += max(baked.rgb - hidden * held, vec3<f32>(0.0));
+    }
+    out.light = min(sum, vec3<f32>(LAMP_MOST)) * params.lights.z;
+    return out;
 }
+
+// Lamp `j`'s light at `world` (facing `n`) were nothing in the way, and in
+// w how strong it is: 0 where it does not reach or is too faint to trace.
+fn lamp_light(j: u32, world: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+    let at = headlights[j * 2u].xyz;
+    let beam = lamp_beam(at, headlights[j * 2u + 1u].xyz, headlights[j * 2u].w > 0.5, world);
+    let facing = dot(n, normalize(at - world));
+    if (facing <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let c = beam * facing;
+    let w = max(c.r, max(c.g, c.b));
+    return vec4<f32>(c, select(w, 0.0, w < LAMP_FAINT));
+}
+
+// Where `world` (facing `n`, `dist` ft away) is the ground under the
+// poles' baked light: that light (rgb) and w 1; else w 0. Off the map no
+// pole reaches, so the ground there has none.
+fn baked_ground(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec4<f32> {
+    if (flood.corner.w < 0.5 || n.y < 0.6) {
+        return vec4<f32>(0.0);
+    }
+    if (abs(world.y - ground_height(world.x, world.z)) > 0.4 + dist * 0.003) {
+        return vec4<f32>(0.0);
+    }
+    let uv = (world.xz - flood.corner.xy) / (flood.size.xy * flood.corner.z);
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    return vec4<f32>(textureSampleLevel(flood_map, mask_sampler, uv, 0.0).rgb, 1.0);
+}
+
+// The lamps' light at a place, and which of the first 64 were traced and
+// reached it (`seen`) or were blocked (`shut`).
+struct Lit {
+    light: vec3<f32>,
+    seen: vec2<u32>,
+    shut: vec2<u32>,
+    // Whether it was the ground under the poles' baked light.
+    ground: bool,
+};
 
 // Whether nothing stands between `world` (facing `n`, `off` ft off it)
 // and the lamp at `at`, the ray stopping `short` ft short of it (past a
 // headlight's own bike, a pole's head): the objects from the surface, the
 // hills from half a foot above it, as the sun's rays do (the smooth ground
 // near the eye lies a few inches off the hills the rays see).
-fn lamp_clear(world: vec3<f32>, n: vec3<f32>, off: f32, at: vec3<f32>, short: f32) -> bool {
-    let start = world + n * off;
+// With `riders_only`, only the moving models are looked for (all else is
+// in the poles' baked light): one place a ray is traced from, as a ray
+// query written out twice makes the shader too big to run many at once.
+fn lamp_clear(world: vec3<f32>, n: vec3<f32>, off: f32, at: vec3<f32>, short: f32, riders_only: bool) -> bool {
+    // Off the surface toward the camera and the lamp, as the sun's rays
+    // start: the side the camera sees is always outside it. (Off along `n`,
+    // which the depths round a pixel give, a post or trunk a few pixels
+    // wide started rays inside itself, in black specks that flickered.)
+    let start = world + normalize(params.camera.xyz - world) * off + normalize(at - world) * off;
     let d = length(at - start);
     var rq: ray_query;
-    rayQueryInitialize(&rq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, 0xffu & ~TERRAIN, 0.0, max(d - short, 0.0), start, (at - start) / d));
+    rayQueryInitialize(&rq, scene, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE, select(0xffu & ~TERRAIN, MOVING, riders_only), 0.0, max(d - short, 0.0), start, (at - start) / d));
     rayQueryProceed(&rq);
     if (rayQueryGetCommittedIntersection(&rq).kind != RAY_QUERY_INTERSECTION_NONE) {
         return false;
+    }
+    if (riders_only) {
+        return true;
     }
     let lifted = start + vec3<f32>(0.0, TERRAIN_LIFT, 0.0);
     let h = length(at - lifted);
@@ -488,8 +573,116 @@ fn noise(p: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
 }
 
-@compute @workgroup_size(8, 8)
-fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
+// What the four probed blocks round pixel `p` (`dist` ft away) saw:
+// whether all four are of its surface, the least and most sun they had,
+// how far off what shaded them was, and whether all saw every lamp.
+struct Near {
+    same: bool,
+    low: f32,
+    high: f32,
+    shade: f32,
+    // The lamps all four saw, and all four found blocked.
+    seen: vec2<u32>,
+    shut: vec2<u32>,
+    // 0 all four off the ground, 1 all on it, 2 some of each.
+    kind: u32,
+};
+
+fn probes_near(p: vec2<i32>, dist: f32) -> Near {
+    let last = vec2<i32>(textureDimensions(probes)) - 1;
+    let q = p / 2;
+    var out = Near(true, 2.0, -2.0, 0.0, vec2<u32>(0xffffffffu), vec2<u32>(0xffffffffu), 2u);
+    var shaded = 0.0;
+    var grounds = 0u;
+    var others = 0u;
+    for (var j = 0; j < 4; j++) {
+        // The blocks either side of the pixel, that it lies between.
+        let at = min(q + vec2<i32>(j & 1, j >> 1u), last);
+        let s = textureLoad(probes, at, 0);
+        if (abs(s.y - dist) > 0.04 * dist + 0.4) {
+            out.same = false;
+        }
+        out.low = min(out.low, s.x);
+        out.high = max(out.high, s.x);
+        if (s.z > 0.0) {
+            out.shade += s.z;
+            shaded += 1.0;
+        }
+        let l = textureLoad(probe_lamps, at, 0);
+        out.seen &= l.xy;
+        out.shut &= l.zw;
+        grounds += u32(s.w > 0.75);
+        others += u32(s.w < 0.25);
+    }
+    if (grounds == 4u) {
+        out.kind = 1u;
+    } else if (others == 4u) {
+        out.kind = 0u;
+    }
+    out.shade /= max(shaded, 1.0);
+    if (!out.same) {
+        out.seen = vec2<u32>(0u);
+        out.shut = vec2<u32>(0u);
+    }
+    return out;
+}
+
+// The first pixel of each 2 x 2 block, traced ahead (as OpenMM2 shares its
+// rays in a block): one ray to the sun, and the lamps lighting it. Where
+// the four blocks round a pixel agree (all lit, all shaded, every lamp
+// seen) and its own frames before say the same, the trace after takes
+// their answer and traces nothing there; anywhere they differ (a shadow's
+// edge, a dapple) it traces its own, so the edges stay as sharp.
+fn probe_pixel(id: vec3<u32>) {
+    let half = vec2<u32>(textureDimensions(probe_out));
+    if (id.x >= half.x || id.y >= half.y) {
+        return;
+    }
+    let p = vec2<i32>(id.xy * 2u);
+    let d = textureLoad(depth, p, 0);
+    if (d >= 1.0) {
+        textureStore(probe_out, vec2<i32>(id.xy), vec4<f32>(1.0, 60000.0, 0.0, 0.5));
+        textureStore(probe_lamps_out, vec2<i32>(id.xy), vec4<u32>(0u));
+        return;
+    }
+    let ndc = vec2<f32>(
+        (f32(p.x) + 0.5) / params.size.x * 2.0 - 1.0,
+        1.0 - (f32(p.y) + 0.5) / params.size.y * 2.0,
+    );
+    let h = params.inverse_view_proj * vec4<f32>(ndc, d, 1.0);
+    let world = h.xyz / h.w;
+    let to_eye = params.camera.xyz - world;
+    let dist = length(to_eye);
+    let lit = headlit(world, p, dist, vec2<u32>(0u), vec2<u32>(0u), 2u);
+    let kind = select(0.0, 1.0, lit.ground);
+    textureStore(probe_lamps_out, vec2<i32>(id.xy), vec4<u32>(lit.seen, lit.shut));
+    // Where the floodlights light it, or its shadow has settled on a
+    // dapple of leaves (the pixels round it trace their own), no sun ray.
+    let old = settled_at(world, dist);
+    if (params.lights.x > 0.0 || (old.y >= SETTLED && old.x > 0.03 && old.x < 0.97)) {
+        textureStore(probe_out, vec2<i32>(id.xy), vec4<f32>(-1.0, dist, 0.0, kind));
+        return;
+    }
+    let to_sun = params.to_sun.xyz;
+    let off = 0.04 + dist * 0.0006;
+    let origin = world + to_sun * off + to_eye / max(dist, 1e-3) * off;
+    let mask = u32(params.to_sun.w);
+    let spread = dist * params.size.w;
+    let flags = select(0u, RAY_FLAG_CULL_NO_OPAQUE, dist > CUTOUT_SHOWN);
+    let side = normalize(cross(to_sun, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(to_sun.y) > 0.99)));
+    let up = cross(side, to_sun);
+    let a = fract(noise(vec2<f32>(p)) + params.size.z * 0.618034) * 6.2831853;
+    let dir = normalize(to_sun + (side * cos(a) + up * sin(a)) * 0.7 * SUN_RADIUS);
+    let things = ray(origin, dir, mask & ~TERRAIN, spread, flags);
+    var hills = Ray(1.0, 0.0);
+    if ((mask & TERRAIN) != 0u && things.light > 0.0) {
+        hills = ray(origin + vec3<f32>(0.0, TERRAIN_LIFT, 0.0), dir, TERRAIN, spread, RAY_FLAG_CULL_NO_OPAQUE);
+    }
+    let first = select(hills.shade, things.shade, things.shade > 0.0);
+    textureStore(probe_out, vec2<i32>(id.xy), vec4<f32>(things.light * hills.light, dist, first, kind));
+}
+
+fn trace_pixel(id: vec3<u32>) {
     let size = vec2<u32>(params.size.xy);
     if (id.x >= size.x || id.y >= size.y) {
         return;
@@ -527,7 +720,8 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     // each frame, so the frames' rays cover the sun's disc evenly and their
     // blend settles fast.
     let turn = fract(noise(vec2<f32>(id.xy)) + params.size.z * 0.618034) * 6.2831853;
-    textureStore(lamps, vec2<i32>(id.xy), vec4<f32>(headlit(world, vec2<i32>(id.xy), dist), 0.0));
+    let near = probes_near(vec2<i32>(id.xy), dist);
+    textureStore(lamps, vec2<i32>(id.xy), vec4<f32>(headlit(world, vec2<i32>(id.xy), dist, near.seen, near.shut, near.kind).light, 0.0));
     if (params.lights.x > 0.0) {
         // Each pixel's points across the banks held still from frame to
         // frame: the banks are wide, their soft edges wider than the blur
@@ -551,9 +745,15 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     let known = moving < 0.5 && old.y >= SETTLED;
     let even = known && (old.x < 0.03 || old.x > 0.97);
     let dappled = known && !even;
-    // (Every pixel is traced every frame: left out every other frame, in
-    // tiles or alone, a shadow moving onto it, a rider's, came a frame late
-    // there, in a checkerboard.)
+    // Settled all lit or all shaded, and the blocks round it see the same
+    // this frame: their answer, no rays.
+    if (even && near.same && near.high - near.low < 0.03 && abs(near.low - old.x) < 0.25) {
+        textureStore(traced, vec2<i32>(id.xy), vec4<f32>((near.low + near.high) * 0.5, dist, near.shade, moving));
+        return;
+    }
+    // (Every pixel is answered from this frame's rays, its own or its
+    // blocks': left out every other frame, in tiles or alone, a shadow
+    // moving onto it, a rider's, came a frame late there, in a checkerboard.)
     for (var i = 0u; i < rays; i++) {
         var a = turn + f32(i) * 3.14159265;
         var r = 0.7 * SUN_RADIUS;
@@ -592,4 +792,89 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     textureStore(traced, vec2<i32>(id.xy), vec4<f32>(light / f32(rays), dist, shade / max(shaded, 1.0), moving));
+}
+
+// The lamps that can reach a workgroup's tile of pixels, found together
+// before its pixels light themselves: the box round the tile's surfaces,
+// and each lamp whose reach meets it. Each pixel then looks through these
+// few, not every lamp on the track (a National's poles are many, and far
+// most are out of reach).
+var<workgroup> tile_low: array<atomic<u32>, 3>;
+var<workgroup> tile_high: array<atomic<u32>, 3>;
+var<workgroup> tile_count: atomic<u32>;
+var<workgroup> tile_lamps: array<u32, 80>;
+
+// A float as a u32 that sorts the same way, for the atomics; and back.
+fn sortable(f: f32) -> u32 {
+    let b = bitcast<u32>(f);
+    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
+}
+
+fn unsortable(k: u32) -> f32 {
+    return bitcast<f32>(select(~k, k & 0x7fffffffu, (k & 0x80000000u) != 0u));
+}
+
+// The surface at pixel `p`, and w 1 if there is one (not the sky, not off
+// the edge).
+fn surface_at(p: vec2<u32>) -> vec4<f32> {
+    let size = vec2<u32>(params.size.xy);
+    if (p.x >= size.x || p.y >= size.y) {
+        return vec4<f32>(0.0);
+    }
+    let d = textureLoad(depth, vec2<i32>(p), 0);
+    if (d >= 1.0) {
+        return vec4<f32>(0.0);
+    }
+    let ndc = vec2<f32>((f32(p.x) + 0.5) / params.size.x * 2.0 - 1.0, 1.0 - (f32(p.y) + 0.5) / params.size.y * 2.0);
+    let h = params.inverse_view_proj * vec4<f32>(ndc, d, 1.0);
+    return vec4<f32>(h.xyz / h.w, 1.0);
+}
+
+// Every invocation of the workgroup calls this, with its pixel's surface.
+fn cull_lamps(at: vec4<f32>, index: u32) {
+    if (index == 0u) {
+        for (var k = 0u; k < 3u; k++) {
+            atomicStore(&tile_low[k], 0xffffffffu);
+            atomicStore(&tile_high[k], 0u);
+        }
+        atomicStore(&tile_count, 0u);
+    }
+    workgroupBarrier();
+    if (at.w > 0.5) {
+        for (var k = 0u; k < 3u; k++) {
+            atomicMin(&tile_low[k], sortable(at[k]));
+            atomicMax(&tile_high[k], sortable(at[k]));
+        }
+    }
+    workgroupBarrier();
+    let count = min(u32(params.lights.y), 80u);
+    let low = vec3<f32>(unsortable(atomicLoad(&tile_low[0])), unsortable(atomicLoad(&tile_low[1])), unsortable(atomicLoad(&tile_low[2])));
+    let high = vec3<f32>(unsortable(atomicLoad(&tile_high[0])), unsortable(atomicLoad(&tile_high[1])), unsortable(atomicLoad(&tile_high[2])));
+    if (all(low <= high)) {
+        for (var j = index; j < count; j += 64u) {
+            let lamp = headlights[j * 2u];
+            let reach = select(LAMP_REACH, POLE_REACH, lamp.w > 0.5);
+            if (length(lamp.xyz - clamp(lamp.xyz, low, high)) <= reach) {
+                tile_lamps[atomicAdd(&tile_count, 1u)] = j;
+            }
+        }
+    }
+    workgroupBarrier();
+}
+
+@compute @workgroup_size(8, 8)
+fn probe(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) index: u32) {
+    let half = vec2<u32>(textureDimensions(probe_out));
+    var at = vec4<f32>(0.0);
+    if (id.x < half.x && id.y < half.y) {
+        at = surface_at(id.xy * 2u);
+    }
+    cull_lamps(at, index);
+    probe_pixel(id);
+}
+
+@compute @workgroup_size(8, 8)
+fn trace(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) index: u32) {
+    cull_lamps(surface_at(id.xy), index);
+    trace_pixel(id);
 }

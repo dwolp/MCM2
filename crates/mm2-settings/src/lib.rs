@@ -96,6 +96,20 @@ pub fn parse_resolution(v: &str) -> Option<String> {
 /// its pixels, [`Quality::most_pixels`]), or a share of the screen. Drawn
 /// smaller than the screen, it is stretched over it, the same shape; the
 /// menus and race display stay sharp.
+/// The times of day (`time=`), with their names: none keeps the track's
+/// own sky. The launcher and the game's event page offer the same.
+pub const TIMES: [(&str, &str); 7] = [
+    ("", "Track's own"),
+    ("dawn", "Dawn"),
+    ("morning", "Morning"),
+    ("noon", "Noon"),
+    ("afternoon", "Afternoon"),
+    ("dusk", "Dusk"),
+    ("night", "Night"),
+];
+/// The weathers (`weather=`), with their names.
+pub const WEATHERS: [(&str, &str); 3] = [("clear", "Clear"), ("overcast", "Overcast"), ("rain", "Rain")];
+
 pub const RESOLUTIONS: [(&str, &str); 6] = [
     ("auto", "Auto"),
     ("50%", "50%"),
@@ -133,14 +147,14 @@ impl Quality {
         let off: &[&str] = match self {
             Quality::Low => &["ao", "shafts", "smooth", "cinematic", "grass"],
             Quality::Medium => &["shafts", "smooth"],
-            Quality::RayTraced => &["smooth"],
             _ => &[],
         };
-        // On with this preset though off unless asked.
+        // On with this preset though off unless asked. The trackside
+        // props and crowd and the colour grade are in none: a matter of
+        // taste, left to the player.
         let on: &[&str] = match self {
-            Quality::High => &["scenery"],
-            Quality::RayTraced => &["raytracing", "scenery", "grade"],
-            Quality::Ultra => &["scenery", "ruts"],
+            Quality::RayTraced => &["raytracing"],
+            Quality::Ultra => &["ruts"],
             _ => &[],
         };
         if on.contains(&name) {

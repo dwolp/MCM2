@@ -150,26 +150,21 @@ fn preset(e: &mut Enhanced, name: &str) -> Result<(), String> {
             e.smooth = false;
             e.pixels = Some(1920 * 1080);
         }
-        // The trackside props and crowd too (a tenth of a millisecond).
-        "high" => {
-            e.scenery = true;
-        }
+        // Every effect that is on unless turned off. (The trackside props
+        // and crowd and the colour grade are in no preset: a matter of
+        // taste, left to the player.)
+        "high" => {}
         // High's look with ray tracing, at 2x anti-aliasing for the frame
-        // rate the rays take; without the smooth hills (near 2 ms in a
-        // forest), with the trackside props and crowd and the colour grade.
+        // rate the rays take.
         "raytraced" | "rt" => {
             e.msaa = 2;
             e.raytracing = true;
-            e.smooth = false;
-            e.scenery = true;
-            e.grade = true;
         }
         // Everything but ray tracing (its own preset, for the cards that
-        // can) and the colour grade (a matter of taste).
+        // can), with lasting ruts.
         "ultra" => {
             e.msaa = 8;
             e.pixels = None;
-            e.scenery = true;
             e.ruts = true;
         }
         _ => return Err(format!("quality must be low, medium, high, raytraced or ultra, not {name}")),
@@ -222,14 +217,9 @@ impl Enhanced {
                 continue;
             }
             if let Some(t) = name.strip_prefix("time=") {
-                e.time = Some(match t {
-                    "dawn" => 7.0,
-                    "morning" => 9.0,
-                    "noon" => 12.5,
-                    "afternoon" => 15.5,
-                    "dusk" | "sunset" => 18.0,
-                    "night" => 23.0,
-                    _ => match t.parse::<f32>() {
+                e.time = Some(match hour(t) {
+                    Some(h) => h,
+                    None => match t.parse::<f32>() {
                         Ok(h) if (0.0..=24.0).contains(&h) => h,
                         _ => return Err(format!("time must be dawn, morning, noon, afternoon, dusk, night or an hour 0-24, not {t}")),
                     },
@@ -323,7 +313,39 @@ impl Enhanced {
     }
 }
 
+/// The hour a named time of day (`time=`, mm2_settings::TIMES) puts the
+/// sun at.
+pub fn hour(name: &str) -> Option<f32> {
+    match name {
+        "dawn" => Some(7.0),
+        "morning" => Some(9.0),
+        "noon" => Some(12.5),
+        "afternoon" => Some(15.5),
+        "dusk" | "sunset" => Some(18.0),
+        "night" => Some(23.0),
+        _ => None,
+    }
+}
+
+/// The weather a name (`weather=`) stands for.
+pub fn weather(name: &str) -> Option<Weather> {
+    match name {
+        "clear" => Some(Weather::Clear),
+        "overcast" => Some(Weather::Overcast),
+        "rain" => Some(Weather::Rain),
+        _ => None,
+    }
+}
+
 static ENHANCED: OnceLock<Enhanced> = OnceLock::new();
+/// The time of day and weather picked on the game's event page, over the
+/// launcher's (crate::frontend): from the next race on.
+static SKY: std::sync::RwLock<Option<(Option<f32>, Weather)>> = std::sync::RwLock::new(None);
+
+/// Sets the time of day and the weather from the next race on.
+pub fn set_sky(time: Option<f32>, weather: Weather) {
+    *SKY.write().unwrap() = Some((time, weather));
+}
 /// The anti-aliasing samples the GPU can draw the scene with, beyond the
 /// 1 and 4 every GPU has.
 static SAMPLE_COUNTS: OnceLock<Vec<u32>> = OnceLock::new();
@@ -372,7 +394,12 @@ pub fn enable(e: Enhanced) {
 
 /// The upgrades, when on.
 pub fn enhanced() -> Option<Enhanced> {
-    ENHANCED.get().copied()
+    let mut e = ENHANCED.get().copied()?;
+    if let Some((time, weather)) = *SKY.read().unwrap() {
+        e.time = time;
+        e.weather = weather;
+    }
+    Some(e)
 }
 
 /// The upgrades as they show now: none while F3 has switched to the
@@ -413,12 +440,13 @@ mod tests {
         assert!(Enhanced::parse("quality=potato").is_err());
         let rt = Enhanced::parse("quality=raytraced").unwrap();
         assert_eq!((rt.msaa, rt.raytracing, rt.scene_size((3840, 2160))), (2, true, (2560, 1440)));
-        assert!(rt.grass && !rt.smooth && rt.scenery && rt.grade);
+        assert!(rt.grass && rt.smooth && !rt.scenery && !rt.grade);
         let medium = Enhanced::parse("quality=medium").unwrap();
         assert!(medium.taa && medium.msaa == 1);
         let ultra = Enhanced::parse("quality=ultra").unwrap();
-        assert!(ultra.scenery && ultra.ruts && !ultra.grade && !ultra.raytracing);
-        assert!(Enhanced::parse("quality=high").unwrap().scenery);
+        assert!(!ultra.scenery && ultra.ruts && !ultra.grade && !ultra.raytracing);
+        let high = Enhanced::parse("quality=high").unwrap();
+        assert!(!high.scenery && !high.grade && high.smooth);
         // A preset's anti-aliasing and resolution, then changed after it.
         let mixed = Enhanced::parse("quality=ultra,msaa=4,resolution=1440p").unwrap();
         assert_eq!((mixed.msaa, mixed.scene_size((3840, 2160))), (4, (2560, 1440)));

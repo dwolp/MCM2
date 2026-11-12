@@ -75,6 +75,9 @@ pub struct EnhGlobals {
     /// Each glowing headlight: its place and how strongly (drawing
     /// coordinates).
     pub lamps: [[f32; 4]; LAMPS],
+    /// The light poles' baked light (crate::flood): its map's corner (x,
+    /// z) and the ft it spans across and down; 0 for none.
+    pub flood: [f32; 4],
 }
 
 /// What the shared group is made of, kept to make it again.
@@ -89,6 +92,8 @@ pub struct Parts {
     clamp: wgpu::Sampler,
     /// The dust clouds' shadows, as the sun sees them.
     dust: wgpu::TextureView,
+    /// The light poles' baked light (crate::flood), or a blank.
+    flood: wgpu::TextureView,
 }
 
 /// Texels a side of the dust's shadow map.
@@ -98,6 +103,8 @@ pub const DUST_SIDE: u32 = 512;
 pub const DUST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The dust's shadow map's binding in the shared group, and its sampler's.
 const DUST_BINDING: u32 = 30;
+/// The light poles' baked light's binding, and its sampler's.
+const FLOOD_BINDING: u32 = 32;
 
 impl Parts {
     /// The shared group, with the ray-traced scene `traced` if drawn.
@@ -125,6 +132,14 @@ impl Parts {
         });
         entries.push(wgpu::BindGroupEntry {
             binding: DUST_BINDING + 1,
+            resource: R::Sampler(&self.clamp),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: FLOOD_BINDING,
+            resource: R::TextureView(&self.flood),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: FLOOD_BINDING + 1,
             resource: R::Sampler(&self.clamp),
         });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -161,6 +176,13 @@ impl Shared {
     /// Makes the group again for the ray-traced scene as it is now.
     pub fn set_traced(&mut self, device: &wgpu::Device, traced: &crate::rt::Scene) {
         self.group = self.parts.group(device, &self.layout, Some(traced));
+    }
+
+    /// Makes the group again with the light poles' baked light `map`
+    /// (crate::flood), and the ray-traced scene `traced` if drawn.
+    pub fn set_flood(&mut self, device: &wgpu::Device, map: &wgpu::TextureView, traced: Option<&crate::rt::Scene>) {
+        self.parts.flood = map.clone();
+        self.group = self.parts.group(device, &self.layout, traced);
     }
 
     /// With `ruts`, a map of tyre ruts over the terrain; with `rt`, the
@@ -269,6 +291,18 @@ impl Shared {
             ty: sampler(),
             count: None,
         });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: FLOOD_BINDING,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: texture(wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Float { filterable: true }),
+            count: None,
+        });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: FLOOD_BINDING + 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: sampler(),
+            count: None,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("enhanced"),
             entries: &entries,
@@ -359,7 +393,24 @@ impl Shared {
                 view_formats: &[],
             })
             .create_view(&Default::default());
+        let flood = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("no flood"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
         let parts = Parts {
+            flood,
             dust: dust.clone(),
             buffer: buffer.clone(),
             shadows: map.create_view(&wgpu::TextureViewDescriptor {
@@ -433,16 +484,23 @@ pub fn splits() -> [f32; 4] {
     [SPLITS[0], SPLITS[1], SPLITS[2], SPLITS[2]]
 }
 
-/// Makes a shader from `source`, with the enhanced drawing's shared
-/// declarations put in where it asks for them.
-pub fn shader(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderModule {
+/// `source` with the enhanced drawing's shared declarations put in where
+/// it asks for them, ray traced (`traced`) or not: what [`shader`] makes.
+pub fn full_source(source: &str, traced: bool) -> String {
     let mut source = source
         .replace("#include \"enhanced.wgsl\"", include_str!("enhanced.wgsl"))
         .replace("#include \"enhanced_fns.wgsl\"", include_str!("enhanced_fns.wgsl"));
-    if crate::graphics::ray_traced() {
+    if traced {
         source = ray_traced(&source);
     }
     source = dusty(&source);
+    flooded(&source)
+}
+
+/// Makes a shader from `source`, with the enhanced drawing's shared
+/// declarations put in where it asks for them.
+pub fn shader(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderModule {
+    let source = full_source(source, crate::graphics::ray_traced());
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -495,6 +553,24 @@ fn ray_traced(source: &str) -> String {
         .replacen("fn sun_point(", "fn sun_point_mapped(", 1)
         .replacen("fn headlight_at(", "fn headlight_none(", 1);
     format!("enable wgpu_ray_query;\n{source}\n{}", include_str!("enhanced_rt.wgsl"))
+}
+
+/// `source` with the light poles' baked light (crate::flood) bound beside
+/// the sun's shadows, for `headlight_at` without ray tracing.
+fn flooded(source: &str) -> String {
+    let Some(line) = source.lines().find(|l| l.contains("var sun_map: texture_depth_2d_array")) else {
+        return source.to_string();
+    };
+    let group = line
+        .split("@group(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .unwrap_or("1");
+    let bindings = format!(
+        "{line}\n@group({group}) @binding({FLOOD_BINDING}) var flood_map: texture_2d<f32>;\n@group({group}) @binding({}) var flood_sampler: sampler;",
+        FLOOD_BINDING + 1
+    );
+    source.replacen(line, &bindings, 1)
 }
 
 /// `source` with the dust clouds' shadows over the sun's, where it reads

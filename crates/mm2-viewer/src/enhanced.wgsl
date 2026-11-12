@@ -50,4 +50,7 @@ struct Enh {
     headlights: vec4<f32>,
     // Each glowing headlight's place and strength.
     lamps: array<vec4<f32>, 64>,
+    // The light poles' baked light (flood.rs): its map's corner (x, z)
+    // and the ft it spans across and down; 0 for none.
+    flood: vec4<f32>,
 };
