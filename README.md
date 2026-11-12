@@ -65,6 +65,11 @@ too, and each has a command-line switch.
 | [One-lap races](#one-lap-races) | National and Supercross can be 1 lap long | Fork only |
 | [Dust clouds with shadows](#dust-clouds-with-shadows) | The enhanced look's dust behind the bikes shades itself and casts soft shadows; smoother, without square blotches | Fork only |
 | [Ray tracing](#ray-tracing) | The enhanced look's sun shadows traced as rays, sharp and reaching to the haze, and wet ground and bike paint reflecting what is round them | Fork only |
+| Steady thin walls | Tents' sides, signs and logos no longer flicker far off, where an outside and an inside face (or a decal and its wall) lay in one plane | Fork only |
+| Far trees as the game drew them | Past 450 ft, trees become the game's own flat pictures from its eco-system atlases, faded in over a band: the same look, the forests a good deal cheaper to draw | Fork only |
+| A new launcher | Pages for playing, graphics, tracks and updates in a sidebar; segmented buttons, sliders and switches for every setting, each effect explained; Google's Material icons | Fork only |
+| [Every graphics setting shown](#every-graphics-setting-shown) | The launcher shows the anti-aliasing (Off, MSAA or TAA) and the scene resolution (Auto or a percentage) each preset picks, to change on their own, and a Ray traced preset | Fork only |
+| [Temporal anti-aliasing](#temporal-anti-aliasing) | Billboards, trees, fences and distant scenery stop shimmering as you ride | Fork only |
 
 ### Ultrawide support
 
@@ -352,8 +357,10 @@ headlights. Each bike's headlight is a spotlight traced like the sun, so
 the riders ahead cast long shadows down the beams, the lamps glow, and a
 rider coming up behind lights you up. On the Nationals the track's light
 poles come on too, each lamp head glowing and lighting a pool of track
-below it, shadows and all. Without ray tracing there are no headlights
-or pole lights and the moon is brighter, so the track still shows.
+below it, shadows and all. The sponsors' boards along the Nationals and
+the finish banner are lit from behind, their colours glowing in the
+dark. Without ray tracing there are no headlights or pole lights and the
+moon is brighter, so the track still shows (the boards glow either way).
 
 **Reflections.** Where something shiny used to show only a painted sky, a
 ray now finds what is really there, lit by the sun where the sun reaches
@@ -369,8 +376,65 @@ It needs **Sun shadows** on, a graphics card that can trace rays (NVIDIA
 RTX, AMD RX 6000 or newer) and the Vulkan driver; on other cards the
 usual look shows and the game says so in `last-run.log`. It costs some
 frame rate: at 3440×1440 on an RTX 4070, on High, a frame takes about
-11 ms on Morenci Mine and 16 ms in the forest of Iron Mountain (about 90
-and 64 frames a second), where the shadow maps manage 120 to 150. 
+12 ms on Morenci Mine and 14 ms in the forest of Iron Mountain (about
+80 and 70 frames a second), where the shadow maps take 7 to 8 ms. Each
+pixel traces only as many rays as it needs: one where the frames before
+have settled on lit or shaded (and then only every other frame), two on
+a settled soft edge or dapple of leaves, eight where the picture is new.
+
+### Every graphics setting shown
+
+The launcher's Quality presets used to set two things it never showed:
+the anti-aliasing (MSAA) and the most pixels the 3D scene is drawn with,
+past which it is drawn smaller and stretched over the screen. Both now
+sit under Quality, set by the preset and free to change after it.
+**Anti-aliasing** is one of Off, MSAA 2×, 4× or 8×, or TAA (see
+[Temporal anti-aliasing](#temporal-anti-aliasing)), which takes MSAA's
+place. **Scene resolution** is Auto, the preset's own (the scene drawn
+with no more than its pixels), or 50% to 100% of the screen.
+
+| Preset | Anti-aliasing | Scene resolution on Auto |
+| --- | --- | --- |
+| Low | Off | Up to 1280×720 worth |
+| Medium | MSAA 2× | Up to 1920×1080 worth |
+| High | MSAA 4× | Up to 2560×1440 worth |
+| Ray traced | MSAA 2× | Up to 2560×1440 worth |
+| Ultra | MSAA 8× | The screen's own |
+
+**Ray traced** is High's effects with ray tracing on, the trackside props
+and crowd and the colour grade, and without smooth hills, at 2×
+anti-aliasing: sharp, and winning back some of the frame rate the rays
+take (smooth hills alone cost nearly 2 ms a frame in a forest). At
+3440×1440 on an RTX 4070 a frame takes about 11.5 ms in Iron Mountain's
+forest and 10 to 11 ms on Morenci Mine (85 to 95 frames a second). It needs a graphics card that can trace
+rays; on others it looks the same but with the usual shadows.
+
+### Temporal anti-aliasing
+
+**TAA (temporal)** in the launcher's Graphics, Anti-aliasing, in place
+of MSAA (`--enhanced=msaa=1,taa`). MSAA smooths the edges of the models,
+but not the fine lettering on the billboards or the leaves, branches,
+fences and windows in the distance, which shimmer as you ride. With this on, each frame is
+drawn a fraction of a pixel aside from the one before and blended with
+them, every pixel followed to where it was a frame ago (on the bikes and
+riders by their own motion), and the result lightly sharpened: in test
+rides the flicker from one frame to the next dropped by about a quarter.
+What holds still keeps settling, and what moves keeps only a few frames,
+so the trees stay sharp as you ride. Rain is drawn over the finished
+picture, so its streaks stay crisp. It works with or without ray tracing
+and costs about what MSAA 2× does: with ray tracing at 3440×1440, a
+frame takes 13.2 ms with TAA, 13.1 with MSAA 2× and 14.1 with MSAA 4×,
+and while riding TAA flickers about a quarter less than either. Without
+MSAA's alpha to coverage the far trees keep their leaves, as the game
+drew them. The ray-traced light shafts are blended with the rest, so
+they hold still too.
+
+With the scene drawn smaller than the screen (Scene resolution below
+100%), TAA also rebuilds it at the screen's own resolution from each
+frame's shifted samples, rather than stretching it: at 67% it is nearly
+as sharp as 100% with MSAA 4× and flickers about 40% less, at 10.5 ms a
+frame against 17 (ray tracing, 3440×1440, RTX 4070). TAA at 67% to 75%
+is the fastest good-looking way to play with ray tracing.
 
 ## Playing this fork
 

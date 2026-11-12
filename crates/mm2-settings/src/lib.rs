@@ -65,13 +65,66 @@ pub enum Quality {
     Low,
     Medium,
     High,
+    /// High's look with ray tracing, at 2x anti-aliasing.
+    RayTraced,
     Ultra,
 }
 
+/// The anti-aliasing the launcher offers, one of them: its name, what it
+/// says, and what it tells `--enhanced`. MSAA smooths the models' and
+/// the ground's edges; TAA blends each frame, drawn a fraction of a pixel
+/// aside, with the ones before, smoothing those and the fine textures
+/// (billboards, leaves, fences) too, in place of MSAA.
+pub const ANTIALIASING: [(&str, &str, &str); 5] = [
+    ("off", "Off", "msaa=1"),
+    ("msaa2", "MSAA 2×", "msaa=2"),
+    ("msaa4", "MSAA 4×", "msaa=4"),
+    ("msaa8", "MSAA 8×", "msaa=8"),
+    ("taa", "TAA (temporal)", "msaa=1,taa"),
+];
+
+/// A scene resolution as saved: `auto`, or 50% to 100%.
+pub fn parse_resolution(v: &str) -> Option<String> {
+    match v.strip_suffix('%').and_then(|p| p.parse::<u32>().ok()) {
+        Some(p) if (50..=100).contains(&p) => Some(format!("{p}%")),
+        _ => (v == "auto").then(|| "auto".into()),
+    }
+}
+
+/// The size the 3D scene is drawn at, as `--enhanced=resolution=` knows
+/// it, and what the launcher says: the preset's own (`auto`: no more than
+/// its pixels, [`Quality::most_pixels`]), or a share of the screen. Drawn
+/// smaller than the screen, it is stretched over it, the same shape; the
+/// menus and race display stay sharp.
+pub const RESOLUTIONS: [(&str, &str); 6] = [
+    ("auto", "Auto"),
+    ("50%", "50%"),
+    ("67%", "67%"),
+    ("75%", "75%"),
+    ("85%", "85%"),
+    ("100%", "100% (the screen's own)"),
+];
+
 impl Quality {
-    pub const ALL: [Quality; 4] = [Quality::Low, Quality::Medium, Quality::High, Quality::Ultra];
+    pub const ALL: [Quality; 5] = [Quality::Low, Quality::Medium, Quality::High, Quality::RayTraced, Quality::Ultra];
     pub fn name(self) -> &'static str {
-        ["low", "medium", "high", "ultra"][self as usize]
+        ["low", "medium", "high", "raytraced", "ultra"][self as usize]
+    }
+
+    /// What the launcher calls it.
+    pub fn label(self) -> &'static str {
+        ["Low", "Medium", "High", "Ray traced", "Ultra"][self as usize]
+    }
+
+    /// The anti-aliasing this preset draws with ([`ANTIALIASING`]).
+    pub fn antialiasing(self) -> &'static str {
+        ["off", "msaa2", "msaa4", "msaa2", "msaa8"][self as usize]
+    }
+
+    /// The most pixels this preset draws the scene with on Auto, as the
+    /// launcher says it.
+    pub fn most_pixels(self) -> &'static str {
+        ["up to 1280×720 worth", "up to 1920×1080 worth", "up to 2560×1440 worth", "up to 2560×1440 worth", "the screen's own"][self as usize]
     }
 
     /// Whether the upgrade `name` is on with this preset unless changed,
@@ -80,8 +133,17 @@ impl Quality {
         let off: &[&str] = match self {
             Quality::Low => &["ao", "shafts", "smooth", "cinematic", "grass"],
             Quality::Medium => &["shafts", "smooth"],
+            Quality::RayTraced => &["smooth"],
             _ => &[],
         };
+        // On with this preset though off unless asked.
+        let on: &[&str] = match self {
+            Quality::RayTraced => &["raytracing", "scenery", "grade"],
+            _ => &[],
+        };
+        if on.contains(&name) {
+            return true;
+        }
         !off.contains(&name) && UPGRADES.iter().any(|u| u.0 == name && u.2)
     }
 }
@@ -173,6 +235,10 @@ pub struct Settings {
     pub use_hires: bool,
     pub enhanced: bool,
     pub quality: Quality,
+    /// The anti-aliasing ([`ANTIALIASING`]) and the most pixels the scene
+    /// is drawn with ([`RESOLUTIONS`]): the preset's unless changed.
+    pub antialiasing: String,
+    pub resolution: String,
     /// `time=`: none keeps the track's own sky.
     pub time: String,
     pub weather: String,
@@ -221,6 +287,8 @@ impl Default for Settings {
             use_hires: true,
             enhanced: false,
             quality: Quality::High,
+            antialiasing: Quality::High.antialiasing().into(),
+            resolution: "auto".into(),
             time: String::new(),
             weather: "clear".into(),
             detail: 0.5,
@@ -262,6 +330,10 @@ impl Settings {
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
         let yes = |v: &str| v == "1" || v == "true";
+        // From before they were shown, the preset's.
+        let (mut antialiasing, mut resolution) = (None, None);
+        // Temporal anti-aliasing was an effect of its own, on top of MSAA.
+        let mut temporal = false;
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
             let v = v.trim();
             match k.trim() {
@@ -272,6 +344,13 @@ impl Settings {
                 "quality" => {
                     s.quality = Quality::ALL.into_iter().find(|q| q.name() == v).unwrap_or(Quality::High)
                 }
+                "antialiasing" => antialiasing = ANTIALIASING.iter().find(|a| a.0 == v).map(|a| a.0.to_string()),
+                // As it was saved before TAA joined it: the samples.
+                "msaa" if antialiasing.is_none() => {
+                    antialiasing = ANTIALIASING.iter().find(|a| a.2 == format!("msaa={v}")).map(|a| a.0.to_string())
+                }
+                "upgrade.taa" => temporal = yes(v),
+                "resolution" => resolution = parse_resolution(v),
                 "time" => s.time = v.into(),
                 "weather" => s.weather = v.into(),
                 "detail" => s.detail = v.parse::<f32>().unwrap_or(0.5).clamp(0.0, 1.0),
@@ -307,6 +386,8 @@ impl Settings {
                 }
             }
         }
+        s.antialiasing = if temporal { "taa".into() } else { antialiasing.unwrap_or_else(|| s.quality.antialiasing().into()) };
+        s.resolution = resolution.unwrap_or_else(|| "auto".into());
         s
     }
 
@@ -314,12 +395,14 @@ impl Settings {
         let p = |o: &Option<PathBuf>| o.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
         let b = |v: bool| if v { "1" } else { "0" };
         let mut t = format!(
-            "version=2\ngame={}\nhires={}\nuse_hires={}\nenhanced={}\nquality={}\ntime={}\nweather={}\ndetail={}\nfullscreen={}\nwindow={}x{}\nvsync={}\ncentred_display={}\nshow_fps={}\ndifficulty={}\nvibration={}\nvibration_strength={}\nsharp_display={}\nair_steer={}\nair_brake={}\nquick_get_up={}\nlap_gap={}\nsteady_camera={}\nfov={}\ncheck_updates={}\n",
+            "version=2\ngame={}\nhires={}\nuse_hires={}\nenhanced={}\nquality={}\nantialiasing={}\nresolution={}\ntime={}\nweather={}\ndetail={}\nfullscreen={}\nwindow={}x{}\nvsync={}\ncentred_display={}\nshow_fps={}\ndifficulty={}\nvibration={}\nvibration_strength={}\nsharp_display={}\nair_steer={}\nair_brake={}\nquick_get_up={}\nlap_gap={}\nsteady_camera={}\nfov={}\ncheck_updates={}\n",
             p(&self.game),
             p(&self.hires),
             b(self.use_hires),
             b(self.enhanced),
             self.quality.name(),
+            self.antialiasing,
+            self.resolution,
             self.time,
             self.weather,
             self.detail,
@@ -359,6 +442,14 @@ impl Settings {
         }
         if self.enhanced {
             let mut list = vec![format!("quality={}", self.quality.name())];
+            if self.antialiasing != self.quality.antialiasing() {
+                if let Some(a) = ANTIALIASING.iter().find(|a| a.0 == self.antialiasing) {
+                    list.push(a.2.to_string());
+                }
+            }
+            if self.resolution != "auto" {
+                list.push(format!("resolution={}", self.resolution));
+            }
             // Only what differs from the preset, after it so a switch wins.
             for (u, on) in UPGRADES.iter().zip(&self.upgrades) {
                 if *on != self.quality.has(u.0) {
@@ -440,6 +531,36 @@ mod tests {
     }
 
     #[test]
+    fn presets_show_their_anti_aliasing_and_resolution() {
+        // A file from before they were shown takes its preset's.
+        let old = Settings::parse("quality=ultra\n");
+        assert_eq!((old.antialiasing.as_str(), old.resolution.as_str()), ("msaa8", "auto"));
+        // Saved as samples, or TAA as an effect of its own.
+        assert_eq!(Settings::parse("quality=high\nmsaa=2\n").antialiasing, "msaa2");
+        assert_eq!(Settings::parse("quality=high\nmsaa=4\nupgrade.taa=1\n").antialiasing, "taa");
+        let mut s = Settings::default();
+        s.enhanced = true;
+        s.quality = Quality::RayTraced;
+        s.antialiasing = s.quality.antialiasing().into();
+        s.resolution = "auto".into();
+        for (u, on) in UPGRADES.iter().zip(s.upgrades.iter_mut()) {
+            *on = s.quality.has(u.0);
+        }
+        // Ray tracing is the preset's own: nothing to add.
+        assert!(s.args().iter().any(|a| a == "--enhanced=quality=raytraced"));
+        s.resolution = "85%".into();
+        assert!(s.args().iter().any(|a| a == "--enhanced=quality=raytraced,resolution=85%"));
+        // Any share from 50% to 100%, from the slider.
+        assert_eq!(Settings::parse("resolution=72%
+").resolution, "72%");
+        assert_eq!(Settings::parse("resolution=20%
+").resolution, "auto");
+        // TAA in place of MSAA.
+        s.antialiasing = "taa".into();
+        assert!(s.args().iter().any(|a| a == "--enhanced=quality=raytraced,msaa=1,taa,resolution=85%"));
+    }
+
+    #[test]
     fn round_trip() {
         let mut s = Settings::default();
         s.game = Some("/x/GAME".into());
@@ -456,12 +577,13 @@ mod tests {
         s.steady_camera = false;
         s.fov = 100;
         s.check_updates = false;
+        s.antialiasing = "msaa2".into();
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(
             s.args(),
             [
                 "/x/GAME",
-                "--enhanced=quality=high,no-shadows,ruts,time=dusk",
+                "--enhanced=quality=high,msaa=2,no-shadows,ruts,time=dusk",
                 "--window",
                 "1920x1080",
                 "--centred-display",
