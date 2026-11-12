@@ -48,6 +48,7 @@ mod bars;
 mod eco;
 mod enhance;
 mod rt;
+mod gpu_time;
 mod grass;
 mod ruts;
 mod dust;
@@ -1729,6 +1730,10 @@ fn load_track(
                 })
                 .collect();
             let mut trunks = Vec::new();
+            // The eco-system's trees among the statics, and each one's far
+            // billboard.
+            let mut trees = 0..0;
+            let mut billboards = Vec::new();
             if let Some(eco) = find(".esb").and_then(|e| {
                 mm2_formats::esb::parse(archive.data(e))
                     .map_err(|err| eprintln!("{}: {err}", e.name))
@@ -1736,9 +1741,11 @@ fn load_track(
             }) {
                 match read_archive(&res.join("ECO.RES")) {
                     Ok(bytes) => {
-                        let (placed, solid) =
+                        let (placed, solid, far) =
                             eco::place(&eco, &rs2::Archive::parse(&bytes)?, &terrain);
                         eprintln!("{} trees and bushes, {} trunks", placed.len(), solid.len());
+                        trees = statics.len()..statics.len() + placed.len();
+                        billboards = far;
                         statics.extend(placed);
                         trunks = solid;
                         model_files.push(bytes.clone());
@@ -1815,6 +1822,7 @@ fn load_track(
             };
             let mut objects = ObjectMesh::build(
                 &statics,
+                (trees, &billboards),
                 &extras,
                 &movable,
                 &animations,
@@ -2800,7 +2808,10 @@ async fn gpu_from(
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("mm2"),
-            required_features: specific | if rays { wgpu::Features::EXPERIMENTAL_RAY_QUERY } else { wgpu::Features::empty() },
+            required_features: specific
+                | if rays { wgpu::Features::EXPERIMENTAL_RAY_QUERY } else { wgpu::Features::empty() }
+                // MM2_GPU_TIMES: each part of the frame timed (gpu_time).
+                | if gpu_time::wanted() { adapter.features() & gpu_time::features() } else { wgpu::Features::empty() },
             required_limits: adapter.limits(),
             // SAFETY: only ray queries are used of the experimental
             // features, and only on a GPU that says it has them.
@@ -2930,6 +2941,7 @@ async fn screenshot(
         }
         let n = n.max(1) as f64;
         eprintln!("bench: {:.2} ms a frame ({:.3} ms recording)", start.elapsed().as_secs_f64() * 1000.0 / n, record * 1000.0 / n);
+        renderer.report_gpu_times(&device);
     }
     let draw = renderer.render(&device, &queue, view, (width, height), camera, time);
     // The in-race display over the race.

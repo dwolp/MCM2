@@ -168,7 +168,7 @@ struct Targets {
     depth: wgpu::TextureView,
     /// The rays' light, blurred.
     soft: wgpu::TextureView,
-    trace_group: wgpu::BindGroup,
+    trace_groups: [wgpu::BindGroup; 2],
     /// Blending in the frames before, and blurring what that gives: one of
     /// each for either of the two histories being the one written.
     blend_groups: [wgpu::BindGroup; 2],
@@ -631,7 +631,11 @@ impl Scene {
             None => (blank.clone(), [blank.clone(), blank.clone()]),
         };
         let p = &self.passes;
-        let trace_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let histories = [shadow_texture(device, size), shadow_texture(device, size)];
+        // Tracing the frame that writes history `w`, with the other (the
+        // frame before's settled shadows) to tell how many rays a pixel
+        // needs.
+        let trace_groups = [0usize, 1].map(|w| device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rt trace"),
             layout: &p.trace.get_bind_group_layout(0),
             entries: &[
@@ -703,9 +707,12 @@ impl Scene {
                     binding: 16,
                     resource: wgpu::BindingResource::TextureView(&lamps),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&histories[1 - w]),
+                },
             ],
-        });
-        let histories = [shadow_texture(device, size), shadow_texture(device, size)];
+        }));
         // Writing history `w`, reading the other; for the shadows and the
         // shafts alike.
         let blend = |raw: &wgpu::TextureView, histories: &[wgpu::TextureView; 2], w: usize| {
@@ -803,7 +810,7 @@ impl Scene {
             size,
             depth,
             soft,
-            trace_group,
+            trace_groups,
             blend_groups,
             blur_groups,
         });
@@ -841,6 +848,7 @@ impl Scene {
         headlights: &[(glam::Vec3, glam::Vec3)],
         poles: &[(glam::Vec3, glam::Vec3)],
         night: f32,
+        mut timer: Option<&mut crate::gpu_time::GpuTimer>,
     ) {
         // w 0 for a headlight, 1 for a light pole (shining down).
         let lamps: Vec<[f32; 8]> = headlights
@@ -877,34 +885,32 @@ impl Scene {
         let w = (p.frame % 2) as usize;
         queue.write_buffer(&p.params, 0, bytemuck::bytes_of(&params));
         let groups = (t.size.0.div_ceil(8), t.size.1.div_ceil(8));
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("rt shadows"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&p.trace);
-        pass.set_bind_group(0, &t.trace_group, &[]);
-        pass.dispatch_workgroups(groups.0, groups.1, 1);
+        // Each step in a pass of its own, so each can be timed.
+        let mut step = |encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, group: &wgpu::BindGroup, size: (u32, u32), label: &'static str| {
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, group, &[]);
+                pass.dispatch_workgroups(size.0, size.1, 1);
+            }
+            if let Some(timer) = timer.as_mut() {
+                timer.mark(encoder, label);
+            }
+        };
+        step(encoder, &p.trace, &t.trace_groups[w], groups, "rt: shadow rays");
         if shafts {
             let half = (t.shaft_size.0.div_ceil(8), t.shaft_size.1.div_ceil(8));
-            pass.set_pipeline(&p.shafts);
-            pass.set_bind_group(0, &t.shaft_group, &[]);
-            pass.dispatch_workgroups(half.0, half.1, 1);
-            pass.set_pipeline(&p.settle);
-            pass.set_bind_group(0, &t.shaft_settle_groups[w], &[]);
-            pass.dispatch_workgroups(half.0, half.1, 1);
+            step(encoder, &p.shafts, &t.shaft_group, half, "rt: shaft rays");
+            step(encoder, &p.settle, &t.shaft_settle_groups[w], half, "rt: shaft blend");
         }
-        pass.set_pipeline(&p.blend);
-        pass.set_bind_group(0, &t.blend_groups[w], &[]);
-        pass.dispatch_workgroups(groups.0, groups.1, 1);
-        pass.set_pipeline(&p.blur);
-        pass.set_bind_group(0, &t.blur_groups[w], &[]);
-        pass.dispatch_workgroups(groups.0, groups.1, 1);
+        step(encoder, &p.blend, &t.blend_groups[w], groups, "rt: shadow blend");
+        step(encoder, &p.blur, &t.blur_groups[w], groups, "rt: shadow blur");
 
     }
 
     /// Builds what has changed: the still parts the first time, the moving
     /// models every time, and the scene over them.
-    pub fn update(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn update(&mut self, encoder: &mut wgpu::CommandEncoder, mut timer: Option<&mut crate::gpu_time::GpuTimer>) {
         let mut entries = Vec::new();
         if !self.built {
             entries.push(self.terrain.entry());
@@ -924,6 +930,9 @@ impl Scene {
                 pass.set_bind_group(0, group, &[]);
                 pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
                 drop(pass);
+                if let Some(t) = timer.as_mut() {
+                    t.mark(encoder, "rt: pose");
+                }
                 entries.push(built.entry());
                 true
             }

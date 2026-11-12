@@ -33,6 +33,8 @@ fn blur(@builtin(global_invocation_id) id: vec3<u32>) {
     // What shades round about, and so how wide the soft edge is, pixels.
     var shade = 0.0;
     var shaded = 0.0;
+    var low = here.x;
+    var high = here.x;
     for (var y = -2; y <= 2; y++) {
         for (var x = -2; x <= 2; x++) {
             let t = textureLoad(raw, clamp(p + vec2<i32>(x, y) * 3, vec2<i32>(0), size - 1), 0);
@@ -40,7 +42,15 @@ fn blur(@builtin(global_invocation_id) id: vec3<u32>) {
                 shade += t.z;
                 shaded += 1.0;
             }
+            low = min(low, t.x);
+            high = max(high, t.x);
         }
+    }
+    // All lit or all shaded round about (most of the screen): no edge to
+    // soften, and no grain left to even out after the blend over time.
+    if (high - low < 0.02) {
+        textureStore(soft, p, vec4<f32>(here.x, here.y, here.z, 0.0));
+        return;
     }
     let pixel = here.y * params.size.w;
     let edge = 2.0 * (shade / max(shaded, 1.0)) * SUN_RADIUS / max(pixel, 1e-4);

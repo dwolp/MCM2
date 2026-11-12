@@ -196,18 +196,23 @@ fn sample_material(m: i32, uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> Sam
 // Material `m` on the level, seen from above, twice at different sizes
 // and turns so its repeats do not show; `dx`, `dy` are the derivatives of
 // the level's x, z, taken before any branch.
-fn material_level(m: i32, world: vec3<f32>, dx: vec2<f32>, dy: vec2<f32>) -> Sample {
+// Far off (`single` 1), where its repeats are too small to see, the
+// second look is left out: each is the texture's own on average.
+fn material_level(m: i32, world: vec3<f32>, dx: vec2<f32>, dy: vec2<f32>, single: f32) -> Sample {
     let s = material_scale(m);
     let uv = world.xz / s;
+    let a = sample_material(m, uv, dx / s, dy / s);
+    if (single >= 1.0) {
+        return a;
+    }
     let turn = mat2x2<f32>(0.8 * 0.37, 0.6 * 0.37, -0.6 * 0.37, 0.8 * 0.37);
     let uv2 = turn * uv + 0.31;
-    let a = sample_material(m, uv, dx / s, dy / s);
     let b = sample_material(m, uv2, turn * (dx / s), turn * (dy / s));
     var out: Sample;
-    out.colour = a.colour * mix(vec3<f32>(1.0), b.colour, 0.45);
-    out.rough = mix(a.rough, b.rough, 0.3);
-    out.normal = normalize(vec3<f32>(a.normal.xy + b.normal.xy * 0.5, a.normal.z));
-    out.height = mix(a.height, b.height, 0.35);
+    out.colour = mix(a.colour * mix(vec3<f32>(1.0), b.colour, 0.45), a.colour, single);
+    out.rough = mix(mix(a.rough, b.rough, 0.3), a.rough, single);
+    out.normal = normalize(mix(vec3<f32>(a.normal.xy + b.normal.xy * 0.5, a.normal.z), a.normal, single));
+    out.height = mix(mix(a.height, b.height, 0.35), a.height, single);
     return out;
 }
 
@@ -250,13 +255,23 @@ fn new_ground(in: VertexOut, painted: vec3<f32>, n: vec3<f32>, dist: f32) -> vec
         w.y,
         w.z,
     );
-    // Only the materials that are here are looked up.
+    // How near the detail shows (see below), and where only one look of
+    // each material is needed.
+    let detail = enh.haze.w;
+    let reach = 0.5 + detail;
+    let near = 1.0 - smoothstep(180.0 * reach, 450.0 * reach, dist);
+    let single = smoothstep(80.0, 120.0, dist);
+    // Only the materials that are here are looked up, and only where their
+    // detail shows; past it, only their sheen and the puddles' hollows
+    // would use them, and an average does.
     let dx = dpdx(in.world.xz);
     let dy = dpdy(in.world.xz);
     var level: array<Sample, 5>;
     for (var m = 0; m < 5; m++) {
-        if (weights[m] > 0.0) {
-            level[m] = material_level(m, in.world, dx, dy);
+        if (near > 0.0 && weights[m] > 0.0) {
+            level[m] = material_level(m, in.world, dx, dy, single);
+        } else {
+            level[m] = Sample(vec3<f32>(1.0), 0.6, vec3<f32>(0.0, 0.0, 1.0), 0.4);
         }
     }
     // Rock is seen from three sides, so cliffs are not smeared.
@@ -267,9 +282,12 @@ fn new_ground(in: VertexOut, painted: vec3<f32>, n: vec3<f32>, dist: f32) -> vec
     let dxy2 = dpdy(in.world.xy) / rs;
     var side_x: Sample;
     var side_z: Sample;
-    if (weights[ROCK] > 0.0) {
+    if (weights[ROCK] > 0.0 && near > 0.0) {
         side_x = sample_material(ROCK, in.world.zy / rs, dzy, dzy2);
         side_z = sample_material(ROCK, in.world.xy / rs, dxy, dxy2);
+    } else {
+        side_x = level[ROCK];
+        side_z = level[ROCK];
     }
     var best = 0.0;
     for (var m = 0; m < 5; m++) {
@@ -305,9 +323,6 @@ fn new_ground(in: VertexOut, painted: vec3<f32>, n: vec3<f32>, dist: f32) -> vec
     // The detail fades with distance, where the painted colour suffices;
     // mostly its light and dark, a little of its own colour.
     // `detail=` (enh.haze.w, 0 to 1) sets how strongly, and how far.
-    let detail = enh.haze.w;
-    let reach = 0.5 + detail;
-    let near = 1.0 - smoothstep(180.0 * reach, 450.0 * reach, dist);
     colour = mix(vec3<f32>(luminance(colour)), colour, 0.35);
     // Gently: the painted ground stays what the eye reads.
     colour = mix(vec3<f32>(1.0), colour, near * (0.35 + 0.5 * detail));

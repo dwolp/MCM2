@@ -68,6 +68,43 @@ fn vertex_light(mode: u32, normal: vec3<f32>) -> vec3<f32> {
     return scene_light(dot(n, globals.to_sun.xyz));
 }
 
+// The eco-system's trees give way to their billboards here, ft, over a
+// dithered band (objects.rs TREE_FAR, TREE_BAND).
+const TREE_FAR: f32 = 450.0;
+const TREE_BAND: f32 = 60.0;
+
+// Where a far tree's billboard corner is: its quad turned round the
+// upright to face the camera, from the corner as stored facing along z
+// (`position`) and its offset from the foot (`off`).
+fn billboard(position: vec3<f32>, off: vec2<f32>) -> vec3<f32> {
+    let foot = position - vec3<f32>(off.x, off.y, 0.0);
+    let f = billboard_facing(foot);
+    return foot + vec3<f32>(f.z, 0.0, -f.x) * off.x + vec3<f32>(0.0, off.y, 0.0);
+}
+
+// The level way from a billboard's foot to the camera.
+fn billboard_facing(foot: vec3<f32>) -> vec3<f32> {
+    let to = globals.camera.xyz - foot;
+    return normalize(vec3<f32>(to.x, 0.0, to.z) + vec3<f32>(1e-4, 0.0, 0.0));
+}
+
+// Whether a fragment of a tree, at `world` on screen pixel `pixel`, is
+// left to its other look: the full tree past the band, the billboard
+// short of it, each by a dither through it.
+fn tree_hidden(world: vec3<f32>, pixel: vec2<f32>) -> bool {
+    let kind = surface.z;
+    if (kind < 0.5) {
+        return false;
+    }
+    let dither = fract(52.9829189 * fract(dot(floor(pixel), vec2<f32>(0.06711056, 0.00583715)))) - 0.5;
+    let edge = TREE_FAR + dither * TREE_BAND;
+    let d = length(world - globals.camera.xyz);
+    if (kind < 1.5) {
+        return d > edge;
+    }
+    return d < edge;
+}
+
 @vertex
 fn vs_main(
     @location(0) position: vec3<f32>,
@@ -77,10 +114,18 @@ fn vs_main(
     @location(4) node: u32,
 ) -> VertexOut {
     let m = nodes[node & 0x3fffffffu];
-    let world = (m * vec4<f32>(position, 1.0)).xyz;
+    var world = (m * vec4<f32>(position, 1.0)).xyz;
+    var n = (m * vec4<f32>(normal, 0.0)).xyz;
+    if (surface.z > 1.5) {
+        // A far tree's billboard, lit as its leaves would be: much as
+        // facing the sun, a little toward the eye.
+        world = billboard(position, normal.xy);
+        let level = normalize(vec3<f32>(globals.to_sun.x, 0.0, globals.to_sun.z) + vec3<f32>(1e-6, 0.0, 0.0));
+        n = normalize(level + billboard_facing(world) * 0.5 + vec3<f32>(0.0, 0.3, 0.0));
+    }
     var out: VertexOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
-    out.normal = (m * vec4<f32>(normal, 0.0)).xyz;
+    out.normal = n;
     out.uv = uv;
     out.color = color;
     out.world = world;
@@ -98,7 +143,7 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, tex_sampler, in.uv) * in.color;
-    if (texel.a < 0.5) {
+    if (texel.a < 0.5 || tree_hidden(in.world, in.clip.xy)) {
         discard;
     }
     // A ghost shows the scene through every other pixel.
@@ -124,6 +169,7 @@ struct CasterOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) world: vec3<f32>,
 };
 
 @vertex
@@ -135,11 +181,15 @@ fn vs_caster(
     @location(4) node: u32,
 ) -> CasterOut {
     let m = nodes[node & 0x3fffffffu];
-    let world = (m * vec4<f32>(position, 1.0)).xyz;
+    var world = (m * vec4<f32>(position, 1.0)).xyz;
+    if (surface.z > 1.5) {
+        world = billboard(position, normal.xy);
+    }
     var out: CasterOut;
     out.clip = shadow.view_proj * vec4<f32>(world, 1.0);
     out.uv = uv;
     out.color = color;
+    out.world = world;
     return out;
 }
 
@@ -157,9 +207,65 @@ fn fs_caster(in: CasterOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_depth(in: CasterOut) {
     let texel = textureSample(tex, tex_sampler, in.uv) * in.color;
+    if (texel.a < 0.5 || tree_hidden(in.world, in.clip.xy)) {
+        discard;
+    }
+}
+
+// The moving models' motion on screen, for temporal anti-aliasing
+// (post.rs): where each of their pixels was a frame ago, in pixels from
+// where it is, and how far it is from the camera.
+struct MotionViews {
+    now: mat4x4<f32>,
+    before: mat4x4<f32>,
+    camera: vec4<f32>,
+    size: vec4<f32>,
+};
+@group(2) @binding(1) var<uniform> motion_views: MotionViews;
+@group(2) @binding(2) var<storage, read> nodes_before: array<mat4x4<f32>>;
+
+struct MotionOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) now: vec4<f32>,
+    @location(3) before: vec4<f32>,
+    @location(4) world: vec3<f32>,
+};
+
+@vertex
+fn vs_motion(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) color: vec4<f32>,
+    @location(4) node: u32,
+) -> MotionOut {
+    let n = node & 0x3fffffffu;
+    let world = (nodes[n] * vec4<f32>(position, 1.0)).xyz;
+    let was = (nodes_before[n] * vec4<f32>(position, 1.0)).xyz;
+    var out: MotionOut;
+    // Drawn where the scene is (shifted as it is), measured unshifted.
+    out.clip = globals.view_proj * vec4<f32>(world, 1.0);
+    out.now = motion_views.now * vec4<f32>(world, 1.0);
+    out.before = motion_views.before * vec4<f32>(was, 1.0);
+    out.uv = uv;
+    out.color = color;
+    out.world = world;
+    return out;
+}
+
+@fragment
+fn fs_motion(in: MotionOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(tex, tex_sampler, in.uv) * in.color;
     if (texel.a < 0.5) {
         discard;
     }
+    if (in.before.w <= 0.0 || in.now.w <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let moved = (in.before.xy / in.before.w - in.now.xy / in.now.w) * vec2<f32>(0.5, -0.5) * motion_views.size.xy;
+    return vec4<f32>(moved, length(in.world - motion_views.camera.xyz), 1.0);
 }
 
 // ---- The enhanced drawing (graphics.rs), none of it the game's. ----
@@ -174,7 +280,12 @@ fn fs_depth(in: CasterOut) {
 @group(3) @binding(3) var material_colour: texture_2d_array<f32>;
 @group(3) @binding(4) var material_normal: texture_2d_array<f32>;
 @group(3) @binding(5) var material_sampler: sampler;
+// x the photo material's layer (-1 none), y 1 for a banner lit from
+// behind at night (materials::backlit).
 @group(1) @binding(2) var<uniform> surface: vec4<f32>;
+
+// How brightly a back-lit banner glows at night, by its own colours.
+const BACKLIT: f32 = 0.9;
 
 #include "enhanced_fns.wgsl"
 
@@ -279,7 +390,7 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         strength *= 1.0 - 0.8 * near;
     }
     let bumped = normalize(bump(n, in.world, luminance(texel.rgb), strength) + bend * sign(dot(n, normalize(in.normal))));
-    if (edge <= 0.0 || (texel.a < 0.5 && enh.flags.x < 0.5)) {
+    if (edge <= 0.0 || (texel.a < 0.5 && enh.flags.x < 0.5) || tree_hidden(in.world, in.clip.xy)) {
         discard;
     }
     if (in.ghost > 0.5 && ((u32(in.clip.x) + u32(in.clip.y)) & 1u) == 0u) {
@@ -375,6 +486,11 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         let h = normalize(globals.to_sun.xyz + v);
         let coat = pow(max(dot(bumped, h), 0.0), 80.0) * 0.5 * lit;
         colour = mix(colour, env * 0.6, fresnel * gloss * 0.25) + globals.sun.rgb * coat * gloss;
+    }
+    // A sponsor's banner lit from behind at night: its own colours glow
+    // through it, a little through the dirt on it.
+    if (surface.y > 0.5 && enh.night.x > 0.0) {
+        colour += texel.rgb * mix(1.0, 0.4, caked) * BACKLIT * enh.night.x;
     }
     return vec4<f32>(apply_haze(colour, in.world, dist), select(1.0, clamp(edge, 0.0, 1.0), enh.flags.x > 0.5));
 }

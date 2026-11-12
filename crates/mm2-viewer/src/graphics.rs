@@ -62,6 +62,10 @@ pub struct Enhanced {
     /// the shadow maps, and reflections in wet ground and glossy paint,
     /// where the GPU can (crate::rt); off unless asked.
     pub raytracing: bool,
+    /// Temporal anti-aliasing: each frame drawn a fraction of a pixel
+    /// apart and blended with the ones before, so fine textures and thin
+    /// edges hold still (crate::post).
+    pub taa: bool,
     /// How dirty the bikes start, 0 to 1.
     pub mud_start: f32,
     /// How strongly the new ground's detail shows, 0 to 1.
@@ -73,6 +77,9 @@ pub struct Enhanced {
     /// (Retina, 4K) it is drawn smaller and stretched over it, the menus
     /// and race display still sharp. None for the screen's own.
     pub pixels: Option<u32>,
+    /// Or a share of the screen's width and height to draw it at, in
+    /// place of `pixels` (`resolution=85%`).
+    pub scale: Option<f32>,
 }
 
 /// The weather, for looks only.
@@ -107,11 +114,13 @@ impl Default for Enhanced {
             mud: true,
             surfaces: true,
             raytracing: false,
+            taa: false,
             mud_start: 0.0,
             detail: 0.5,
             weather: Weather::Clear,
             time: None,
             pixels: Some(QHD),
+            scale: None,
         }
     }
 }
@@ -139,11 +148,21 @@ fn preset(e: &mut Enhanced, name: &str) -> Result<(), String> {
             e.pixels = Some(1920 * 1080);
         }
         "high" => {}
+        // High's look with ray tracing, at 2x anti-aliasing for the frame
+        // rate the rays take; without the smooth hills (near 2 ms in a
+        // forest), with the trackside props and crowd and the colour grade.
+        "raytraced" | "rt" => {
+            e.msaa = 2;
+            e.raytracing = true;
+            e.smooth = false;
+            e.scenery = true;
+            e.grade = true;
+        }
         "ultra" => {
             e.msaa = 8;
             e.pixels = None;
         }
-        _ => return Err(format!("quality must be low, medium, high or ultra, not {name}")),
+        _ => return Err(format!("quality must be low, medium, high, raytraced or ultra, not {name}")),
     }
     Ok(())
 }
@@ -153,6 +172,10 @@ impl Enhanced {
     /// screen's own, or smaller with the same shape when it has more than
     /// [`Enhanced::pixels`].
     pub fn scene_size(&self, screen: (u32, u32)) -> (u32, u32) {
+        if let Some(k) = self.scale {
+            let k = k as f64;
+            return (((screen.0 as f64 * k).round() as u32).max(1), ((screen.1 as f64 * k).round() as u32).max(1));
+        }
         let have = screen.0 as f64 * screen.1 as f64;
         match self.pixels {
             Some(most) if have > most as f64 => {
@@ -224,6 +247,15 @@ impl Enhanced {
             // The most pixels to draw the scene with: a size (1920x1080),
             // a height (1080p), or "native" for the screen's own.
             if let Some(r) = name.strip_prefix("resolution=").or(name.strip_prefix("res=")) {
+                // A share of the screen: 50% to 100%.
+                if let Some(p) = r.strip_suffix('%') {
+                    e.scale = Some(match p.parse::<f32>() {
+                        Ok(p) if (25.0..=100.0).contains(&p) => p / 100.0,
+                        _ => return Err(format!("resolution must be 25% to 100%, not {r}")),
+                    });
+                    continue;
+                }
+                e.scale = None;
                 e.pixels = match r {
                     "native" | "full" => None,
                     _ => {
@@ -269,9 +301,10 @@ impl Enhanced {
                 "scenery" | "props" => e.scenery = on,
                 "surfaces" | "materials" => e.surfaces = on,
                 "raytracing" | "rt" => e.raytracing = on,
+                "taa" | "temporal" => e.taa = on,
                 _ => {
                     return Err(format!(
-                        "unknown upgrade {item:?}: try no-msaa, no-lighting, no-shadows, no-distance, no-bloom, no-ao, no-sky, no-grade, no-ground, no-grass, no-clouds, no-ruts, no-dust, no-bikes, no-shafts, no-cinematic, no-mud, no-smooth, no-scenery, no-surfaces, raytracing, mud=0.5, detail=0.5, msaa=8, quality=low/medium/high/ultra, resolution=1080p, weather=rain or time=dusk"
+                        "unknown upgrade {item:?}: try no-msaa, no-lighting, no-shadows, no-distance, no-bloom, no-ao, no-sky, no-grade, no-ground, no-grass, no-clouds, no-ruts, no-dust, no-bikes, no-shafts, no-cinematic, no-mud, no-smooth, no-scenery, no-surfaces, raytracing, taa, mud=0.5, detail=0.5, msaa=8, quality=low/medium/high/raytraced/ultra, resolution=1080p or 85%, weather=rain or time=dusk"
                     ))
                 }
             }
@@ -368,6 +401,16 @@ mod tests {
         let low = Enhanced::parse("quality=low").unwrap();
         assert_eq!((low.msaa, low.ao, low.scene_size((2560, 1440))), (1, false, (1280, 720)));
         assert!(Enhanced::parse("quality=potato").is_err());
+        let rt = Enhanced::parse("quality=raytraced").unwrap();
+        assert_eq!((rt.msaa, rt.raytracing, rt.scene_size((3840, 2160))), (2, true, (2560, 1440)));
+        assert!(rt.grass && !rt.smooth && rt.scenery && rt.grade);
+        // A preset's anti-aliasing and resolution, then changed after it.
+        let mixed = Enhanced::parse("quality=ultra,msaa=4,resolution=1440p").unwrap();
+        assert_eq!((mixed.msaa, mixed.scene_size((3840, 2160))), (4, (2560, 1440)));
+        // A share of the screen, whatever the preset.
+        let share = Enhanced::parse("quality=high,resolution=75%").unwrap();
+        assert_eq!(share.scene_size((3440, 1440)), (2580, 1080));
+        assert!(Enhanced::parse("resolution=150%").is_err());
     }
 
     #[test]

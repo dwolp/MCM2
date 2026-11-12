@@ -49,6 +49,11 @@ struct Params {
 // pixel, for the scene's shaders.
 @group(0) @binding(15) var<storage, read> headlights: array<vec4<f32>>;
 @group(0) @binding(16) var lamps: texture_storage_2d<rgba16float, write>;
+// The frame before's shadows as rt_temporal.wgsl settled them: x the
+// light, w how many frames it has gathered there.
+@group(0) @binding(17) var settled: texture_2d<f32>;
+// A pixel's shadow has settled with this many frames gathered.
+const SETTLED: f32 = 3.0;
 
 // A headlight's colour and strength (a ft away), how wide its beam is
 // (the cosines of where it is full and where it ends), and how far it
@@ -241,6 +246,47 @@ fn on_moving(world: vec3<f32>, to_eye: vec3<f32>, dist: f32, pixel: vec2<i32>) -
         textureStore(motion, pixel, vec4<f32>(then, length(params.history.yzw - was), 1.0));
     }
     return 1.0;
+}
+
+// What the frames before settled on for the surface at `world` (`dist` ft
+// from the camera): x its light, y how many frames it has gathered (0
+// for none), z how far off what shades it is, read where it was on screen a frame ago from the pixels
+// that saw it, as rt_temporal.wgsl reads it to blend.
+fn settled_at(world: vec3<f32>, dist: f32) -> vec3<f32> {
+    if (params.history.x < 0.5) {
+        return vec3<f32>(0.0);
+    }
+    let was = params.previous * vec4<f32>(world, 1.0);
+    if (was.w <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let size = vec2<i32>(params.size.xy);
+    let then = length(params.history.yzw - world);
+    let at = vec2<f32>(was.x / was.w * 0.5 + 0.5, 0.5 - was.y / was.w * 0.5) * params.size.xy - 0.5;
+    let base = vec2<i32>(floor(at));
+    let f = at - floor(at);
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var j = 0; j < 4; j++) {
+        let o = vec2<i32>(j & 1, j >> 1u);
+        let q = base + o;
+        if (any(q < vec2<i32>(0)) || any(q >= size)) {
+            continue;
+        }
+        let old = textureLoad(settled, q, 0);
+        if (abs(old.y - then) > 0.04 * dist + 0.4) {
+            continue;
+        }
+        let w = mix(1.0 - f.x, f.x, f32(o.x)) * mix(1.0 - f.y, f.y, f32(o.y));
+        sum += old.xwz * w;
+        weight += w;
+    }
+    // Most of it must have seen this surface, or the blend will not
+    // trust it either.
+    if (weight < 0.5) {
+        return vec3<f32>(0.0);
+    }
+    return sum / weight;
 }
 
 // The way out of the surface at pixel `p` (`world`), from its neighbours'
@@ -477,7 +523,10 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     // (as OpenMM2's ray traced sun shadows do).
     let side = normalize(cross(to_sun, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(to_sun.y) > 0.99)));
     let up = cross(side, to_sun);
-    let turn = noise(vec2<f32>(id.xy) + params.size.z * 5.588238) * 6.2831853;
+    // Their turn: a fixed one for the pixel, moved on by the golden ratio
+    // each frame, so the frames' rays cover the sun's disc evenly and their
+    // blend settles fast.
+    let turn = fract(noise(vec2<f32>(id.xy)) + params.size.z * 0.618034) * 6.2831853;
     textureStore(lamps, vec2<i32>(id.xy), vec4<f32>(headlit(world, vec2<i32>(id.xy), dist), 0.0));
     if (params.lights.x > 0.0) {
         // Each pixel's points across the banks held still from frame to
@@ -492,6 +541,19 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     var shaded = 0.0;
     var rays = 2u;
     var first_light = -1.0;
+    // How many rays: where the frames before have settled (rt_temporal's
+    // count of them) on all lit or all shaded, one, to see it is still
+    // so; where they have settled on a soft edge or a dapple of leaves,
+    // the two, each frame's adding to the many gathered; and where the
+    // picture is new or has just changed, all eight at once.
+    let moving = on_moving(world, to_eye, dist, vec2<i32>(id.xy));
+    let old = settled_at(world, dist);
+    let known = moving < 0.5 && old.y >= SETTLED;
+    let even = known && (old.x < 0.03 || old.x > 0.97);
+    let dappled = known && !even;
+    // (Every pixel is traced every frame: left out every other frame, in
+    // tiles or alone, a shadow moving onto it, a rider's, came a frame late
+    // there, in a checkerboard.)
     for (var i = 0u; i < rays; i++) {
         var a = turn + f32(i) * 3.14159265;
         var r = 0.7 * SUN_RADIUS;
@@ -519,9 +581,15 @@ fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
         if (i == 0u) {
             first_light = got;
         }
-        if (i == 1u && abs(got - first_light) > 0.25) {
+        // Settled even, and this ray says the same: it is enough. Settled
+        // on a dapple, one a frame too: the blend gathers the frames' rays
+        // (each frame's at another place on the sun's disc).
+        if (i == 0u && ((even && abs(got - old.x) < 0.25) || dappled)) {
+            rays = 1u;
+        }
+        if (i == 1u && abs(got - first_light) > 0.25 && !dappled) {
             rays = 8u;
         }
     }
-    textureStore(traced, vec2<i32>(id.xy), vec4<f32>(light / f32(rays), dist, shade / max(shaded, 1.0), on_moving(world, to_eye, dist, vec2<i32>(id.xy))));
+    textureStore(traced, vec2<i32>(id.xy), vec4<f32>(light / f32(rays), dist, shade / max(shaded, 1.0), moving));
 }

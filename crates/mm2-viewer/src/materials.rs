@@ -32,6 +32,14 @@ pub fn surfaced(track_file: &str) -> bool {
     track_file.eq_ignore_ascii_case("FARM.ENV")
 }
 
+/// Whether an object texture is a sponsor's banner or board, lit from
+/// behind at night (the enhanced drawing's night races): the boards along
+/// the National tracks and the finish banner, each texture all banner.
+pub fn backlit(texture: &str) -> bool {
+    let stem = texture.to_ascii_lowercase();
+    matches!(stem.split('.').next().unwrap_or_default(), "signs_08" | "signs2_08" | "signs3_08" | "finishbanner_08")
+}
+
 /// The material an object texture of the trial tracks is mostly made of,
 /// picked by eye; None for those left as they are (people, signs, tyres).
 pub fn surface(texture: &str) -> Option<u32> {

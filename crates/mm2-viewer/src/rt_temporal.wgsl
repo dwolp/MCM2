@@ -25,8 +25,17 @@ struct Params {
 // whether it is known.
 @group(0) @binding(5) var motion: texture_2d<f32>;
 
-// How much of the frames before is kept: about the last five.
-const KEEP: f32 = 0.8;
+// The most frames a pixel's history gathers (its w counts them): each new
+// frame is one more among them, so the rays' grain on leaves and soft
+// edges settles the longer a place is seen, and a place just come into
+// view shows its own frame at once.
+const MOST_FRAMES: f32 = 24.0;
+// And held still, where only its grain changes from frame to frame.
+const MOST_FRAMES_STILL: f32 = 48.0;
+// How far past what is round about now the history may be, held still:
+// enough for the grain, not for a shadow that comes or goes (it is
+// pulled most of the way at once).
+const STILL_SLACK: f32 = 0.25;
 
 @compute @workgroup_size(8, 8)
 fn blend(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -63,19 +72,38 @@ fn blend(@builtin(global_invocation_id) id: vec3<u32>) {
         uv = ((vec2<f32>(p) + 0.5) + m.xy) / params.size.xy;
         then = m.z;
     }
-    let q = vec2<i32>(floor(uv * params.size.xy));
-    if (any(q < vec2<i32>(0)) || any(q >= size)) {
+    // The history between the four pixels round where it was, each by how
+    // near it is, and only those that saw this surface: something else
+    // stood there, if it was not as far from the camera of the frame
+    // before as this place is. (Not the one nearest pixel: a fraction of a
+    // pixel's shift, as temporal anti-aliasing gives each frame, would
+    // pick another leaf's.)
+    let at = uv * params.size.xy - 0.5;
+    let base = vec2<i32>(floor(at));
+    let f = at - floor(at);
+    var sum = 0.0;
+    var frames = 0.0;
+    var weight = 0.0;
+    for (var j = 0; j < 4; j++) {
+        let o = vec2<i32>(j & 1, j >> 1u);
+        let q = base + o;
+        if (any(q < vec2<i32>(0)) || any(q >= size)) {
+            continue;
+        }
+        let old = textureLoad(before, q, 0);
+        if (abs(old.y - then) > 0.04 * now.y + 0.4) {
+            continue;
+        }
+        let w = mix(1.0 - f.x, f.x, f32(o.x)) * mix(1.0 - f.y, f.y, f32(o.y));
+        sum += old.x * w;
+        frames += old.w * w;
+        weight += w;
+    }
+    if (weight < 0.01) {
         textureStore(blended, p, now);
         return;
     }
-    let old = textureLoad(before, q, 0);
-    // Something else stood there, if it was not as far from the camera
-    // of the frame before as this place is.
-    let moved = abs(old.y - then);
-    if (moved > 0.04 * now.y + 0.4) {
-        textureStore(blended, p, now);
-        return;
-    }
+    let old_x = sum / weight;
     // Kept only within what the pixels round about see now, so a shadow
     // that moves leaves no trail.
     var low = now.x;
@@ -87,6 +115,17 @@ fn blend(@builtin(global_invocation_id) id: vec3<u32>) {
             high = max(high, t);
         }
     }
-    let kept = clamp(old.x, low, high);
-    textureStore(blended, p, vec4<f32>(mix(now.x, kept, KEEP), now.y, now.z, 0.0));
+    // Held still (less than half a pixel's move), the history may stray a
+    // little past what is round about now, so the rays' grain averages
+    // away rather than pushing the limits round each frame.
+    let still = length(uv * params.size.xy - (vec2<f32>(p) + 0.5)) < 0.5;
+    let loose = select(0.0, STILL_SLACK, still);
+    let kept = clamp(old_x, low - loose, high + loose);
+    // Clamped, the history was wrong there (a shadow moved): it counts
+    // for fewer frames, so the new ones take over.
+    var n = min(frames / weight + 1.0, select(MOST_FRAMES, MOST_FRAMES_STILL, still));
+    if (kept != old_x) {
+        n = min(n, 5.0);
+    }
+    textureStore(blended, p, vec4<f32>(mix(kept, now.x, 1.0 / (n + 1.0)), now.y, now.z, n));
 }

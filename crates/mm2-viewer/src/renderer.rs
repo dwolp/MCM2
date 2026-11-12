@@ -167,6 +167,10 @@ pub struct TerrainRenderer {
     pub cinematic: Option<f32>,
     /// The last frame's view and projection, for that motion blur.
     last_view_proj: Option<Mat4>,
+    /// Temporal anti-aliasing: frames drawn, for each one's shift, and
+    /// the last one's view unshifted, the camera's place and way.
+    taa_frame: u32,
+    taa_last: Option<(Mat4, Vec3, Vec3)>,
     /// What the scene is drawn in: the target's format, or HDR with the
     /// enhanced drawing; and the samples a pixel.
     scene_format: wgpu::TextureFormat,
@@ -180,6 +184,8 @@ pub struct TerrainRenderer {
     headlights: Vec<(Vec3, Vec3)>,
     /// The track's light poles' lamp heads (drawing coordinates).
     pole_lamps: Vec<(Vec3, Vec3)>,
+    /// Each part of the frame timed on the GPU, when asked (gpu_time).
+    gpu_timer: Option<crate::gpu_time::GpuTimer>,
 }
 
 /// The terrain renderer's part of the enhanced drawing.
@@ -208,7 +214,34 @@ struct Enhanced {
     rt_depth: Option<wgpu::RenderPipeline>,
 }
 
+/// Marks the end of the part `$label` of the frame, between passes, when
+/// the parts are timed (gpu_time).
+macro_rules! mark {
+    ($timer:expr, $encoder:expr, $label:expr) => {
+        if let Some(t) = $timer.as_mut() {
+            t.mark($encoder, $label);
+        }
+    };
+}
+
+/// The same inside a render pass.
+macro_rules! mark_pass {
+    ($timer:expr, $pass:expr, $label:expr) => {
+        if let Some(t) = $timer.as_mut() {
+            t.mark_pass($pass, $label);
+        }
+    };
+}
+
 impl TerrainRenderer {
+    /// Prints how long each part of the frame took on the GPU, when timed
+    /// (`MM2_GPU_TIMES`).
+    pub fn report_gpu_times(&mut self, device: &wgpu::Device) {
+        if let Some(t) = &mut self.gpu_timer {
+            t.report(device);
+        }
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -589,6 +622,9 @@ impl TerrainRenderer {
             stadium: false,
             cinematic: None,
             last_view_proj: None,
+            taa_frame: 0,
+            taa_last: None,
+            gpu_timer: crate::gpu_time::GpuTimer::new(device, queue),
             scene_format,
             samples,
             size: (0, 0),
@@ -894,7 +930,22 @@ impl TerrainRenderer {
             (start, std::f32::consts::LN_2 / span, (start + 7.0 * span).clamp(end, 20_000.0))
         });
         let far = haze.map_or(end, |h| h.2);
-        let proj = Mat4::perspective_rh(camera.fovy(aspect), aspect, 1.0, far);
+        let plain = Mat4::perspective_rh(camera.fovy(aspect), aspect, 1.0, far);
+        // Temporal anti-aliasing: each frame drawn a different fraction of
+        // a pixel aside (the Halton points by 2 and 3), the steps blended
+        // into one (crate::post).
+        let taa = showing.is_some_and(|e| e.taa);
+        let mut shift = [0.0; 2];
+        let proj = if taa {
+            self.taa_frame = self.taa_frame.wrapping_add(1);
+            let i = self.taa_frame % 16 + 1;
+            let (x, y) = (halton(i, 2) - 0.5, halton(i, 3) - 0.5);
+            // Up in the projection is down on the screen.
+            shift = [x, -y];
+            Mat4::from_translation(Vec3::new(2.0 * x / scene.0 as f32, 2.0 * y / scene.1 as f32, 0.0)) * plain
+        } else {
+            plain
+        };
         // The shadow (0x4df8c0): a camera at the sun, 80000 ft away and so
         // as good as parallel, fitted round the casters, their middle and
         // a radius about them; what it sees is laid over the ground.
@@ -939,7 +990,22 @@ impl TerrainRenderer {
             shadow_on: [shadow.is_some() as u32 as f32, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-        let seen = crate::cull::Frustum::new(proj * camera.view());
+        let seen = crate::cull::Frustum::new(plain * camera.view());
+        // The last frame's view for temporal anti-aliasing, and whether
+        // the camera cut (a jump or a sharp turn): then it starts over.
+        let taa_frame = taa.then(|| {
+            let now = plain * camera.view();
+            let forward = camera.forward();
+            let last = self.taa_last.filter(|l| l.1.distance(camera.position) < 25.0 && l.2.dot(forward) > 0.85);
+            crate::post::Taa {
+                inverse: now.inverse(),
+                before: last.map_or(now, |l| l.0),
+                camera: camera.position,
+                shift,
+                fresh: last.is_none(),
+            }
+        });
+        self.taa_last = taa.then(|| (plain * camera.view(), camera.position, camera.forward()));
         crate::cull::runs(
             self.blocks.iter().filter(|b| seen.sees(b.0, b.1)).map(|b| b.2.clone()),
             &mut self.runs,
@@ -1015,7 +1081,7 @@ impl TerrainRenderer {
         if let Some(objects) = &mut self.objects {
             objects.extras_shown = showing.is_some_and(|e| e.scenery);
             objects.update(queue, time);
-            objects.cull(0, &seen);
+            objects.cull(0, &seen, camera.position);
             if let Some((casters, ..)) = shadow {
                 if self.shadow_casters != Some(casters) {
                     objects.set_casters(device, &casters);
@@ -1026,7 +1092,7 @@ impl TerrainRenderer {
             if sun_shadows && !traced {
                 objects.set_cascades(queue, &cascades);
                 for (i, c) in cascades.iter().enumerate() {
-                    objects.cull(1 + i, &crate::cull::Frustum::new(*c));
+                    objects.cull(1 + i, &crate::cull::Frustum::new(*c), camera.position);
                 }
             }
         }
@@ -1055,6 +1121,9 @@ impl TerrainRenderer {
         }
 
         let mut encoder = device.create_command_encoder(&Default::default());
+        if let Some(t) = &mut self.gpu_timer {
+            t.begin(device, &mut encoder);
+        }
         if let (Some(objects), Some(_)) = (&self.objects, shadow) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow mask"),
@@ -1074,6 +1143,7 @@ impl TerrainRenderer {
             });
             objects.draw_casters(&mut pass);
         }
+        mark!(self.gpu_timer, &mut encoder, "old shadow");
         if let Some(e) = &mut self.enhanced {
             if let Some(ruts) = &mut e.ruts {
                 ruts.paint(device, queue, &mut encoder, &e.shared.ruts.0);
@@ -1109,6 +1179,7 @@ impl TerrainRenderer {
                 }
             }
         }
+        mark!(self.gpu_timer, &mut encoder, "ruts, dust shadow");
         // The ray-traced shadows: the moving models posed, the nearest
         // surface of each pixel drawn, and its shadow traced, before the
         // scene that reads it.
@@ -1118,7 +1189,8 @@ impl TerrainRenderer {
                 e.shared.set_traced(device, rt);
                 e.post.set_traced_shafts(rt.shafts());
             }
-            rt.update(&mut encoder);
+            rt.update(&mut encoder, self.gpu_timer.as_mut());
+            mark!(self.gpu_timer, &mut encoder, "rt: build");
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("rt depth"),
@@ -1153,6 +1225,7 @@ impl TerrainRenderer {
                     objects.draw_camera_depth(queue, &mut pass, proj * camera.view());
                 }
             }
+            mark!(self.gpu_timer, &mut encoder, "rt: depth pass");
             // Indoors (a stadium, with no sky box) only the moving models
             // cast, as with the cascades.
             // Lit by floodlights, everything casts; with only the stadium's
@@ -1168,7 +1241,7 @@ impl TerrainRenderer {
             let night = day.as_ref().map_or(0.0, |d| d.night);
             let lamps: &[(Vec3, Vec3)] = if night > 0.0 { &self.headlights } else { &[] };
             let poles: &[(Vec3, Vec3)] = if night > 0.0 { &self.pole_lamps } else { &[] };
-            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts, indoors, lamps, poles, night);
+            rt.trace(queue, &mut encoder, proj * camera.view(), camera.position, lights.to_sun, mask, camera.fovy(aspect), shafts, indoors, lamps, poles, night, self.gpu_timer.as_mut());
         }
         if let (Some(objects), Some(e), true) = (&self.objects, &self.enhanced, sun_shadows && !traced) {
             for (cascade, layer) in e.shared.layers.iter().enumerate() {
@@ -1192,10 +1265,11 @@ impl TerrainRenderer {
                 objects.draw_sun_depth(&mut pass, cascade, self.sky.is_none());
             }
         }
+        mark!(self.gpu_timer, &mut encoder, "sun cascades");
         {
             let (colour, resolve, depth, store) = match &mut self.enhanced {
                 Some(e) => {
-                    let (colour, resolve, depth) = e.post.scene(device, scene);
+                    let (colour, resolve, depth) = e.post.scene(device, scene, (width, height));
                     (colour, resolve, depth, wgpu::StoreOp::Store)
                 }
                 None => (target, None, &self.depth.as_ref().unwrap().0, wgpu::StoreOp::Discard),
@@ -1238,6 +1312,7 @@ impl TerrainRenderer {
                     None => sky.draw(&mut pass),
                 }
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: sky");
             match shared {
                 Some((group, terrain, own)) => {
                     pass.set_pipeline(terrain);
@@ -1254,6 +1329,7 @@ impl TerrainRenderer {
             for run in &self.runs {
                 pass.draw_indexed(run.clone(), 0, 0..1);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: terrain");
             if let Some((crowd, own, group)) = self
                 .enhanced
                 .as_ref()
@@ -1262,6 +1338,7 @@ impl TerrainRenderer {
             {
                 crowd.draw(&mut pass, own, group);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: crowd");
             if let Some((smooth, own, group)) = self
                 .enhanced
                 .as_ref()
@@ -1270,15 +1347,18 @@ impl TerrainRenderer {
             {
                 smooth.draw(&mut pass, own, group);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: smooth hills");
             if let Some((grass, own, group)) = grass {
                 grass.draw(&mut pass, own, group);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: grass");
             if let Some(objects) = &self.objects {
                 match shared {
                     Some((group, ..)) => objects.draw_enhanced(&mut pass, group),
                     None => objects.draw(&mut pass),
                 }
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: objects");
             if let Some((dust, own, group)) = self
                 .enhanced
                 .as_ref()
@@ -1287,24 +1367,59 @@ impl TerrainRenderer {
             {
                 dust.draw(&mut pass, own, group);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: dust");
             if self.particles_on {
                 self.particles.draw(&mut pass);
             }
+            mark_pass!(self.gpu_timer, &mut pass, "scene: particles");
             if let Some((rain, own, group)) = self
                 .enhanced
                 .as_ref()
-                .filter(|_| showing.is_some_and(|e| e.weather == crate::graphics::Weather::Rain))
+                // (With temporal anti-aliasing the last step draws it, or
+                // its streaks would blend away.)
+                .filter(|_| !taa && showing.is_some_and(|e| e.weather == crate::graphics::Weather::Rain))
                 .and_then(|e| Some((e.rain.as_ref()?, &e.group, &e.shared.group)))
             {
                 rain.draw(&mut pass, own, group);
             }
         }
+        mark!(self.gpu_timer, &mut encoder, "scene: rain, resolve");
+        // The moving models' motion on screen, for the anti-aliasing.
+        if let (Some(e), Some(objects), Some(t)) = (&self.enhanced, &self.objects, taa_frame) {
+            if let Some((motion, depth)) = e.post.motion() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("motion"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: motion,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                objects.draw_motion(queue, &mut pass, plain * camera.view(), t.before, camera.position, scene);
+            }
+        }
+        mark!(self.gpu_timer, &mut encoder, "taa motion");
         if let Some(e) = &self.enhanced {
             // The sun's place on the screen, for its shafts: strongest
             // looking toward it, fading as it leaves the screen, and none
             // indoors.
             let sun = showing.filter(|_| self.sky.is_some() && self.sky_on).and_then(|_| {
-                let clip = proj * camera.view() * (camera.position + lights.to_sun * 10_000.0).extend(1.0);
+                let clip = plain * camera.view() * (camera.position + lights.to_sun * 10_000.0).extend(1.0);
                 if clip.w <= 0.0 {
                     return None;
                 }
@@ -1314,16 +1429,36 @@ impl TerrainRenderer {
                 let strength = 1.6 * (1.0 - (off / 0.4).clamp(0.0, 1.0)) * (1.0 - day.as_ref().map_or(0.0, |d| d.cover * 0.8));
                 (strength > 0.0).then(|| ([x, y, strength], lights.sun))
             });
-            let view_proj = proj * camera.view();
+            let view_proj = plain * camera.view();
             let cinematic = self.cinematic.filter(|_| showing.is_some_and(|e| e.cinematic)).map(|focus| {
                 let last = self.last_view_proj.unwrap_or(view_proj);
                 (focus, last * view_proj.inverse())
             });
             self.last_view_proj = Some(view_proj);
-            e.post.finish(queue, &mut encoder, target, proj, showing, sun, cinematic, (width, height));
+            // The rain over the finished picture, with the anti-aliasing.
+            let rain = day.as_ref().filter(|d| taa && e.rain.is_some() && d.rain > 0.0 && showing.is_some_and(|s| s.weather == crate::graphics::Weather::Rain)).map(|d| {
+                let a = lights.globals().0;
+                let c = d.horizon * 0.9 + Vec3::new(a[0], a[1], a[2]) * 0.3;
+                ([time, d.rain, aspect, camera.position.x], c.into())
+            });
+            e.post.finish(queue, &mut encoder, target, proj, showing, sun, cinematic, (width, height), taa_frame, rain, self.gpu_timer.as_mut());
+        }
+        if let Some(t) = &mut self.gpu_timer {
+            t.end(&mut encoder);
         }
         encoder.finish()
     }
+}
+
+/// The `i`th point of the Halton sequence by `base`, 0 to 1.
+fn halton(mut i: u32, base: u32) -> f32 {
+    let (mut f, mut r) = (1.0, 0.0);
+    while i > 0 {
+        f /= base as f32;
+        r += f * (i % base) as f32;
+        i /= base;
+    }
+    r
 }
 
 /// Uploads every terrain texture with its mips into one texture array.
