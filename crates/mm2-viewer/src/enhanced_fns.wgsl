@@ -98,6 +98,12 @@ fn headlight_at(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec3<f32> {
     return min(c, vec3<f32>(2.5)) * enh.night.x;
 }
 
+// The same, softly, for what stands by the track: here as it is (the baked
+// light is already smooth); ray traced (enhanced_rt.wgsl), spread wide.
+fn headlight_soft(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec3<f32> {
+    return headlight_at(world, n, dist);
+}
+
 // Whether the sun reaches `p`, a point in the air, past what is solid: -1
 // here, for not known (the shadow maps are read per pixel); the ray-traced
 // scene's (enhanced_rt.wgsl) answers when it is drawn.

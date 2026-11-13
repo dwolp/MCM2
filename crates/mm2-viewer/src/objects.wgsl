@@ -288,7 +288,8 @@ fn fs_motion(in: MotionOut) -> @location(0) vec4<f32> {
 @group(3) @binding(4) var material_normal: texture_2d_array<f32>;
 @group(3) @binding(5) var material_sampler: sampler;
 // x the photo material's layer (-1 none), y 1 for a banner lit from
-// behind at night (materials::backlit).
+// behind at night (materials::backlit), z which drawing of a tree it is
+// (0 none).
 @group(1) @binding(2) var<uniform> surface: vec4<f32>;
 
 // How brightly a back-lit banner glows at night, by its own colours.
@@ -408,13 +409,23 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
     }
     let dist = length(in.world - globals.camera.xyz);
     var light = in.light;
+    // What stands still by the track: not a tree, not a rider or bike.
+    let roadside = in.moving < 0.5 && surface.z < 0.5;
     if (enh.flags.x > 0.5 && in.mode < UNLIT) {
         var l = globals.to_sun.xyz;
         if (in.mode == PLANT) {
             l = normalize(vec3<f32>(l.x, 0.0, l.z) + vec3<f32>(1e-6, 0.0, 0.0));
         }
-        let lit = billboard_sun(sun_visible(in.world, n, dist, 0.0));
-        let facing = max(dot(bumped, l), 0.0);
+        var lit = billboard_sun(sun_visible(in.world, n, dist, 0.0));
+        var facing = max(dot(bumped, l), 0.0);
+        // What stands still by the track (fences, signs, poles, tents; not
+        // the trees, nor the riders) softly: its shadows half as deep, the
+        // light wrapping round it, so a rail or post a pixel across
+        // doesn't flicker between lit and not as it slides past.
+        // At night only: by day the sun's shadows ground them.
+        let soft = select(0.0, enh.night.x, roadside);
+        lit = mix(lit, mix(lit, 1.0, 0.5), soft);
+        facing = mix(facing, dot(bumped, l) * 0.5 + 0.5, soft);
         // Ambient a little brighter from the sky above than the ground below.
         let sky = mix(0.95, 1.15, bumped.y * 0.5 + 0.5);
         let game = globals.ambient.rgb * sky + globals.sun.rgb * facing * lit;
@@ -449,9 +460,20 @@ fn fs_enhanced(in: VertexOut) -> @location(0) vec4<f32> {
         // The paint's detail still shows faintly through a thin coat.
         albedo = mix(albedo, dirt * (0.7 + 0.6 * luminance(texel.rgb)) * (0.85 + 0.3 * splat), caked);
     }
+    // A banner lit from behind shows only its own glow at night, nothing
+    // else's light on it: steady.
+    let glowing = surface.y > 0.5 && enh.night.x > 0.0;
+    if (glowing) {
+        light *= 1.0 - enh.night.x;
+    }
     var colour = albedo * light;
-    if (in.mode < UNLIT) {
-        colour += albedo * headlight_at(in.world, n, dist);
+    if (in.mode < UNLIT && !glowing) {
+        // What stands by the track the lamps' light round about it, softly.
+        if (roadside) {
+            colour += albedo * headlight_soft(in.world, n, dist);
+        } else {
+            colour += albedo * headlight_at(in.world, n, dist);
+        }
     }
     // The headlights (on the moving models) and the light poles' heads
     // glow at night.

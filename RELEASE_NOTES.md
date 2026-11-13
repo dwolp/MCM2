@@ -56,6 +56,10 @@ itself.
 * **Flickering tents, signs and logos far off**: the tents' walls and the
   logos on boards and banners no longer flicker in and out at a distance.
 * **Billboards no longer shimmer** along the tracks.
+* **Steadier nights**: the sponsors' boards glow steadily, lit only by
+  their own light, and fences, signs and other things beside the track no
+  longer flicker in the lamps' light. No more flickering black specks on
+  tree trunks and posts either.
 
 On an RTX 4070 at 3440×1440 by day, the Ray traced preset runs at about
 90 frames a second in Iron Mountain's forest and 115 on Morenci Mine;
