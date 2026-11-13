@@ -186,6 +186,36 @@ fn sun_point(p: vec3<f32>) -> f32 {
     return rt_sunlit(p);
 }
 
+// The lamps' light at `world` softly, for what stands by the track: the mean
+// of the traced light over a wide patch round it (5 x 5 pixels 3 apart),
+// of those about as far away, so a thin rail's or post's pixels, each traced alone
+// and easily lit or shaded by chance, are evened out.
+fn headlight_soft(world: vec3<f32>, n: vec3<f32>, dist: f32) -> vec3<f32> {
+    if (enh.headlights.x < 0.5) {
+        return vec3<f32>(0.0);
+    }
+    let c = enh.view_proj * vec4<f32>(world, 1.0);
+    if (c.w <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let size = vec2<i32>(textureDimensions(rt_lamps));
+    let uv = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+    let at = vec2<i32>(uv * vec2<f32>(size));
+    let tolerance = dist * 0.15 + 1.0;
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let q = clamp(at + vec2<i32>(x, y) * 3, vec2<i32>(0), size - 1);
+            if (abs(textureLoad(rt_shadows, q, 0).y - dist) < tolerance) {
+                sum += textureLoad(rt_lamps, q, 0).rgb;
+                weight += 1.0;
+            }
+        }
+    }
+    return sum / max(weight, 1.0);
+}
+
 // The bikes' headlights' light at `world` facing `n` (rt_shadow.wgsl
 // traced it, shadows and all, for each pixel): read as the shadows are,
 // from the pixels round about whose surface is about as far away.

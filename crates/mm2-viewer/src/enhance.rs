@@ -551,7 +551,8 @@ fn ray_traced(source: &str) -> String {
         .replacen("fn sun_visible(", "fn sun_mapped(", 1)
         .replacen("fn reflection(", "fn reflection_sky(", 1)
         .replacen("fn sun_point(", "fn sun_point_mapped(", 1)
-        .replacen("fn headlight_at(", "fn headlight_none(", 1);
+        .replacen("fn headlight_at(", "fn headlight_none(", 1)
+        .replacen("fn headlight_soft(", "fn headlight_soft_none(", 1);
     format!("enable wgpu_ray_query;\n{source}\n{}", include_str!("enhanced_rt.wgsl"))
 }
 
